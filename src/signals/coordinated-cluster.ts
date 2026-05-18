@@ -1,10 +1,11 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
-import { getProfile } from "../wallet-profiler.js";
+import { getProfile, type WalletProfile } from "../wallet-profiler.js";
 import { canAlert, markAlerted } from "../alert-cooldown.js";
 import { sendMessage } from "../telegram.js";
 import { log } from "../log.js";
+import { categoryBucket, type FundingCategory } from "../funding-source.js";
 
 const ENRICHED_PATH = join(process.cwd(), "state", "trades_enriched.jsonl");
 
@@ -43,6 +44,9 @@ interface WalletAgg {
   trades: EnrichedTrade[];
   age_days: number | null;
   is_fresh: boolean;
+  first_inflow_from: string | null;
+  first_inflow_ts: number | null;
+  funding_source: FundingCategory;
 }
 
 /** Read enriched trades for a single market within the window. */
@@ -80,6 +84,9 @@ function aggregateWallets(trades: EnrichedTrade[]): Map<string, WalletAgg> {
         trades: [],
         age_days: null,
         is_fresh: false,
+        first_inflow_from: null,
+        first_inflow_ts: null,
+        funding_source: null,
       };
       map.set(w, agg);
     }
@@ -105,9 +112,44 @@ interface PairScore {
   factors: string[];
 }
 
+const CEX_SAME_TIGHT_MS = 7 * 24 * 60 * 60 * 1000;
+
 function pairwiseScore(a: WalletAgg, b: WalletAgg): PairScore {
   const factors: string[] = [];
   let s = 0;
+
+  // Same direct funder (private wallet, not bridge/CEX) — strongest signal.
+  if (
+    a.first_inflow_from &&
+    b.first_inflow_from &&
+    a.first_inflow_from === b.first_inflow_from
+  ) {
+    const bucket = categoryBucket(a.funding_source);
+    if (bucket === "private") {
+      s += 0.8;
+      factors.push(`same-funder:${a.first_inflow_from.slice(0, 8)}…`);
+    } else if (bucket === "cex") {
+      // Same exact CEX hot wallet — slightly less strong than private.
+      s += 0.5;
+      factors.push(`same-cex-hot:${a.funding_source}`);
+    }
+  } else if (
+    a.funding_source !== null &&
+    a.funding_source === b.funding_source &&
+    categoryBucket(a.funding_source) === "cex" &&
+    a.first_inflow_ts !== null &&
+    b.first_inflow_ts !== null
+  ) {
+    // Same CEX (any hot wallet of same CEX) within tight window.
+    const dt = Math.abs(a.first_inflow_ts - b.first_inflow_ts);
+    if (dt <= CEX_SAME_TIGHT_MS) {
+      s += 0.5;
+      factors.push(`${a.funding_source}±${Math.round(dt / 86400000)}d`);
+    } else {
+      s += 0.1;
+      factors.push(`${a.funding_source}-far`);
+    }
+  }
 
   // Same dominant side?
   const aSide = a.net_outcome0_notional >= a.net_outcome1_notional ? 0 : 1;
@@ -170,21 +212,44 @@ interface MarketMeta {
   end_date: string;
 }
 
-async function profileWallets(wallets: string[]): Promise<Map<string, { age_days: number | null; is_fresh: boolean }>> {
-  const out = new Map<string, { age_days: number | null; is_fresh: boolean }>();
+interface ProfileBits {
+  age_days: number | null;
+  is_fresh: boolean;
+  first_inflow_from: string | null;
+  first_inflow_ts: number | null;
+  funding_source: FundingCategory;
+}
+
+async function profileWallets(wallets: string[]): Promise<Map<string, ProfileBits>> {
+  const out = new Map<string, ProfileBits>();
   for (const w of wallets) {
     try {
-      const p = await getProfile(w);
+      const p: WalletProfile | null = await getProfile(w);
       if (!p) {
-        out.set(w, { age_days: null, is_fresh: false });
+        out.set(w, {
+          age_days: null,
+          is_fresh: false,
+          first_inflow_from: null,
+          first_inflow_ts: null,
+          funding_source: null,
+        });
         continue;
       }
       out.set(w, {
         age_days: p.age_days,
         is_fresh: p.age_days !== null && p.age_days < FRESH_AGE_DAYS,
+        first_inflow_from: p.first_inflow_from ?? null,
+        first_inflow_ts: p.first_meaningful_inflow_ts ?? null,
+        funding_source: p.funding_source ?? null,
       });
     } catch {
-      out.set(w, { age_days: null, is_fresh: false });
+      out.set(w, {
+        age_days: null,
+        is_fresh: false,
+        first_inflow_from: null,
+        first_inflow_ts: null,
+        funding_source: null,
+      });
     }
   }
   return out;
@@ -247,13 +312,16 @@ export async function checkMarket(conditionId: string, meta: MarketMeta): Promis
     for (const [w, a] of sorted.slice(0, MAX_WALLETS_PER_MARKET)) wallets.set(w, a);
   }
 
-  // Enrich with age info.
+  // Enrich with age + funding info.
   const profiles = await profileWallets([...wallets.keys()]);
   for (const [w, agg] of wallets) {
     const p = profiles.get(w);
     if (p) {
       agg.age_days = p.age_days;
       agg.is_fresh = p.is_fresh;
+      agg.first_inflow_from = p.first_inflow_from;
+      agg.first_inflow_ts = p.first_inflow_ts;
+      agg.funding_source = p.funding_source;
     }
   }
 

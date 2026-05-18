@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 
 import { rpc } from "./alchemy-pool.js";
+import { classify, type FundingCategory } from "./funding-source.js";
 import { log, err } from "./log.js";
 
 const PATH = join(process.cwd(), "state", "wallet_profiles.json");
@@ -24,8 +25,10 @@ export interface WalletProfile {
   score: number;
   /** Total count of USDC transfers we scanned (capped). */
   inflow_count: number;
-  /** Source label for first inflow (placeholder for Phase 6 funding classifier). */
-  funding_source: string | null;
+  /** Source address of the first meaningful inflow (lowercased), or null. */
+  first_inflow_from: string | null;
+  /** Classified category for the first inflow source. */
+  funding_source: FundingCategory;
   last_refreshed_iso: string;
   last_refreshed_ts: number;
 }
@@ -98,6 +101,7 @@ async function buildProfile(wallet: string): Promise<WalletProfile> {
     const tsIso = first?.metadata?.blockTimestamp || null;
     const ts = tsIso ? Date.parse(tsIso) : null;
     const ageDays = ts ? Math.floor((Date.now() - ts) / (24 * 60 * 60 * 1000)) : null;
+    const fromLower = first?.from ? first.from.toLowerCase() : null;
     return {
       wallet: lc,
       first_meaningful_inflow_iso: tsIso,
@@ -105,7 +109,8 @@ async function buildProfile(wallet: string): Promise<WalletProfile> {
       age_days: ageDays,
       score: computeScore(ageDays),
       inflow_count: 0, // placeholder; we only fetched until first hit
-      funding_source: null,
+      first_inflow_from: fromLower,
+      funding_source: fromLower ? classify(fromLower) : null,
       last_refreshed_iso: new Date().toISOString(),
       last_refreshed_ts: Date.now(),
     };
