@@ -58,8 +58,15 @@ const BRIDGE_ADDRESSES: Record<string, string> = {
   "0xce16f69375520ab01377ce7b88f5ba8c48f8d666": "squid",
 };
 
+/**
+ * CEX hot wallets across EVM chains. EOAs share the same address on every
+ * EVM chain (same private key → same derived address), so this single dict
+ * covers Polygon, Ethereum, Base, Arbitrum, Optimism, BSC, Avalanche, etc.
+ * Critical: classify is also applied to bridge_origin_wallet (which may live
+ * on Base/Arbitrum/Ethereum), so this dictionary is multi-chain by design.
+ */
 const CEX_ADDRESSES: Record<string, string> = {
-  // Binance (hot wallets on Polygon)
+  // Binance
   "0xf977814e90da44bfa03b6295a0616a897441acec": "binance",
   "0x290275e3db66394c52272398959845170e4dcb88": "binance",
   "0x21a31ee1afc51d94c2efccaa2092ad1028285549": "binance",
@@ -67,6 +74,12 @@ const CEX_ADDRESSES: Record<string, string> = {
   "0x56eddb7aa87536c09ccc2793473599fd21a8b17f": "binance",
   "0x9696f59e4d72e237be84ffd425dcad154bf96976": "binance",
   "0x4976a4a02f38326660d17bf34b431dc6e2eb2327": "binance",
+  "0x28c6c06298d514db089934071355e5743bf21d60": "binance", // Binance 14 (Ethereum)
+  "0x8d97689c9818892b700e27f316cc3e41e17fbeb9": "binance",
+  "0xbd612a3f30dca67bf60a39fd0d35e39b7ab80774": "binance",
+  "0xa180fe01b906a1be37be6c534a3300785b20d947": "binance",
+  "0xb4d12f10c34acbbd16d5b22dadeb09bd9d8f9c81": "binance",
+  "0xd0a3a8b14b30a3a8b048bbb37086a3afff79e21d": "binance",
 
   // Coinbase
   "0x71660c4005ba85c37ccec55d0c4493e66fe775d3": "coinbase",
@@ -77,20 +90,28 @@ const CEX_ADDRESSES: Record<string, string> = {
   "0xeb2629a2734e272bcc07bda959863f316f4bd4cf": "coinbase",
   "0x77696bb39917c91a0c3908d577d5e322095425ca": "coinbase",
   "0xfcd3842f85ed87ba2889b4d35893403796e67ff1": "coinbase",
+  "0xa9d1e08c7793af67e9d92fe308d5697fb81d3e43": "coinbase",
+  "0x6b76f8b1e9e59913bfe758821887311ba1805cab": "coinbase",
+  "0xd34d96e1be88a8e4e8bb37dc8c7e02fe1cbaba47": "coinbase",
 
   // OKX
   "0xa7efae728d2936e78bda97dc267687568dd593f4": "okx",
   "0x59a5208b32e627891c389ebafc644145224006e8": "okx",
   "0xc708a1c712ba26dc618f972ad7a187f76c8596fd": "okx",
   "0x868dab0b8e21ec0a48b726a1ccf25f23362e947c": "okx",
+  "0x236f9f97e0e62388479bf9e5ba4889e46b0273c3": "okx",
+  "0x6cc5f688a315f3dc28a7781717a9a798a59fda7b": "okx",
 
   // Kraken
   "0xae2d4617c862309a3d75a0ffb358c7a5009c673f": "kraken",
   "0xa83b11093c858c86321fbc4c20fe82cdbd58e09e": "kraken",
+  "0x267be1c1d684f78cb4f6a176c4911b741e4ffdc0": "kraken",
+  "0x53d284357ec70ce289d6d64134dfac8e511c8a3d": "kraken",
 
   // Bybit
   "0xee5b5b923ffce93a870b3104b7ca09c3db80047a": "bybit",
   "0xf89d7b9c864f589bbf53a82105107622b35eaa40": "bybit",
+  "0xa7a93fd0a276fc1c0197a5b5623ed117786eed06": "bybit",
 
   // MEXC
   "0x9e6cee49c6bb9d7b4ee10cba2bf63d8146ba2f1c": "mexc",
@@ -99,14 +120,30 @@ const CEX_ADDRESSES: Record<string, string> = {
 
   // Gate.io
   "0x1c4b70a3968436b9a0a9cf5205c787eb81bb558c": "gate",
+  "0x0d0707963952f2fba59dd06f2b425ace40b492fe": "gate",
 
   // KuCoin
   "0xd6216fc19db775df9774a6e33526131da7d19a2c": "kucoin",
   "0xb8e6d31e7b212b2b7250ee9c26c56cebbfbe6b23": "kucoin",
+  "0x2933782b5a8d72f2754103d1489614f29bfa4625": "kucoin",
 
   // HTX (formerly Huobi)
   "0xab5c66752a9e8167967685f1450532fb96d5d24f": "htx",
   "0xeec606a66edb6f497662ea31b5eb1610da87ab5f": "htx",
+  "0xdc76cd25977e0a5ae17155770273ad58648900d3": "htx",
+
+  // Solana CEX hot wallets (base58, lowercased to match our normalization).
+  // Note: lowercasing collapses base58 case sensitivity — extremely low real
+  // collision risk but worth knowing. Compare strictly against this dict.
+  "5tzfkikscxhk5zxcgbxzxdw7gtjjd1mbwuofbhuvuai9": "binance",
+  "9un5wqe3q4ag8bni4dhhpxfluMrubqxgnzuyxmjphsbt": "binance",
+  "9wzdxwbbmkg8ztbnmquxvqraygzzdsgydlvl9zytawwm": "binance",
+  "h8smjscqxfkiftcfdr3dumlpwcrbm61lgfj8n4dk3wjs": "coinbase",
+  "2aqdphj2jpcegpiatuxjqxa8qmaffegfqwslwsprpicm": "coinbase",
+  "fpwqqhqqoeavu3wu2qzmff1hx48yyfwsLorgxg83e99t": "coinbase",
+  "fwznbcnxwquhtawe9rxvq2ldcenssh12dsznf4riouN5": "kraken",
+  "5vcwktcxgcj6kit5fybxjvriw3xelsfdhyrpsqtjnmcd": "okx",
+  "8sgbxz3yrq9zdwzehywzqyiua9adn8jmidodzlh2cmav": "bybit",
 };
 
 const FIAT_ONRAMP_ADDRESSES: Record<string, string> = {

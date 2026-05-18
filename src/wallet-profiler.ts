@@ -31,10 +31,14 @@ export interface WalletProfile {
   /** Classified category for the first inflow source. */
   funding_source: FundingCategory;
   /** Origin wallet on a source chain that initiated the earliest Relay bridge to this proxy.
-   *  Populated only when funding_source is bridge:relay or unclassified. null otherwise. */
+   *  Populated only when funding_source is bridge:* or unclassified. null otherwise. */
   bridge_origin_wallet: string | null;
   /** Chain id where bridge_origin_wallet lives. */
   bridge_origin_chain: number | null;
+  /** Classification of bridge_origin_wallet itself. If this is a CEX/service,
+   *  two proxies sharing the same origin should NOT cluster — many real users
+   *  withdraw from the same Binance hot wallet on Base. */
+  bridge_origin_funding_source: FundingCategory;
   last_refreshed_iso: string;
   last_refreshed_ts: number;
 }
@@ -113,12 +117,16 @@ async function buildProfile(wallet: string): Promise<WalletProfile> {
     // Phase 6b: trace bridge origin for relay-funded (or unclassified-sender) wallets.
     let bridge_origin_wallet: string | null = null;
     let bridge_origin_chain: number | null = null;
+    let bridge_origin_funding_source: FundingCategory = null;
     const bucket = categoryBucket(funding);
     if (bucket === "bridge" || bucket === "private") {
       const origin = await fetchEarliestRelayOrigin(lc);
       if (origin) {
         bridge_origin_wallet = origin.user;
         bridge_origin_chain = origin.chain_id;
+        // Classify the origin too — Coinbase Base / Binance Solana would
+        // otherwise spuriously link hundreds of users.
+        bridge_origin_funding_source = classify(origin.user);
       }
     }
 
@@ -133,6 +141,7 @@ async function buildProfile(wallet: string): Promise<WalletProfile> {
       funding_source: funding,
       bridge_origin_wallet,
       bridge_origin_chain,
+      bridge_origin_funding_source,
       last_refreshed_iso: new Date().toISOString(),
       last_refreshed_ts: Date.now(),
     };
