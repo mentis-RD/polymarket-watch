@@ -20,6 +20,7 @@ interface ProcessSpec {
 const PROCESSES: ProcessSpec[] = [
   { name: "market-discovery", maxAgeMs: 90 * 60 * 1000 }, // 90 min (cycle is 60 min)
   { name: "digest", maxAgeMs: 10 * 60 * 1000 }, // 10 min (ticks every 1 min)
+  { name: "tg-control", maxAgeMs: 5 * 60 * 1000 }, // 5 min (long-poll heartbeats per cycle)
 ];
 
 const ALERT_COOLDOWN_MS = 30 * 60 * 1000; // 30 min between alerts per process

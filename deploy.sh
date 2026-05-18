@@ -48,18 +48,26 @@ fi
 # Otherwise, smart restart based on which files changed.
 RESTART_DISCOVERY=0
 RESTART_DIGEST=0
+RESTART_CONTROL=0
 
 while IFS= read -r f; do
   case "$f" in
     src/market-discovery.ts) RESTART_DISCOVERY=1 ;;
     src/digest.ts)           RESTART_DIGEST=1 ;;
-    src/polymarket-api.ts|src/telegram.ts|src/heartbeat.ts|src/log.ts)
+    src/tg-control.ts|src/watchlist.ts) RESTART_CONTROL=1 ;;
+    src/polymarket-api.ts)
       RESTART_DISCOVERY=1
       RESTART_DIGEST=1
+      ;;
+    src/telegram.ts|src/heartbeat.ts|src/log.ts)
+      RESTART_DISCOVERY=1
+      RESTART_DIGEST=1
+      RESTART_CONTROL=1
       ;;
     ecosystem.config.cjs)
       RESTART_DISCOVERY=1
       RESTART_DIGEST=1
+      RESTART_CONTROL=1
       ;;
     src/watchdog.ts) : ;; # cron-driven, no restart needed
     *) : ;;
@@ -69,9 +77,11 @@ done <<< "$CHANGED"
 # Ensure pm2 is running our procs (first deploy).
 pm2 describe market-discovery >/dev/null 2>&1 || pm2 start ecosystem.config.cjs --only market-discovery
 pm2 describe digest          >/dev/null 2>&1 || pm2 start ecosystem.config.cjs --only digest
+pm2 describe tg-control      >/dev/null 2>&1 || pm2 start ecosystem.config.cjs --only tg-control
 
 [ "$RESTART_DISCOVERY" = "1" ] && pm2 restart market-discovery && echo "restarted market-discovery"
 [ "$RESTART_DIGEST"    = "1" ] && pm2 restart digest          && echo "restarted digest"
+[ "$RESTART_CONTROL"   = "1" ] && pm2 restart tg-control      && echo "restarted tg-control"
 
 pm2 save >/dev/null 2>&1 || true
 echo "[$(date -u +%FT%TZ)] deploy done"
