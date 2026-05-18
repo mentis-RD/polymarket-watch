@@ -3,7 +3,7 @@ import { join, dirname } from "node:path";
 
 import { rpc } from "./alchemy-pool.js";
 import { classify, categoryBucket, type FundingCategory } from "./funding-source.js";
-import { fetchEarliestRelayOrigin } from "./bridge-tracer.js";
+import { fetchEarliestBridgeOrigin } from "./bridge-tracer.js";
 import { log, err } from "./log.js";
 
 const PATH = join(process.cwd(), "state", "wallet_profiles.json");
@@ -114,13 +114,20 @@ async function buildProfile(wallet: string): Promise<WalletProfile> {
     const fromLower = first?.from ? first.from.toLowerCase() : null;
     const funding = fromLower ? classify(fromLower) : null;
 
-    // Phase 6b: trace bridge origin for relay-funded (or unclassified-sender) wallets.
+    // Phase 6b/c: trace bridge origin for bridge-funded (or unclassified) wallets.
+    // Dispatches to the right tracer by bridge name (extracted from
+    // funding_source like "bridge:relay" → "relay"). For unknown senders
+    // ("private" bucket) tries Relay + Wormhole as fallbacks since the
+    // unidentified sender might actually be a tracer-supported bridge we
+    // don't have in the address dict.
     let bridge_origin_wallet: string | null = null;
     let bridge_origin_chain: number | null = null;
     let bridge_origin_funding_source: FundingCategory = null;
     const bucket = categoryBucket(funding);
     if (bucket === "bridge" || bucket === "private") {
-      const origin = await fetchEarliestRelayOrigin(lc);
+      const bridgeName =
+        funding && funding.startsWith("bridge:") ? funding.slice("bridge:".length) : null;
+      const origin = await fetchEarliestBridgeOrigin(bridgeName, lc);
       if (origin) {
         bridge_origin_wallet = origin.user;
         bridge_origin_chain = origin.chain_id;
