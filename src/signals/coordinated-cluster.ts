@@ -47,6 +47,7 @@ interface WalletAgg {
   first_inflow_from: string | null;
   first_inflow_ts: number | null;
   funding_source: FundingCategory;
+  bridge_origin_wallet: string | null;
 }
 
 /** Read enriched trades for a single market within the window. */
@@ -87,6 +88,7 @@ function aggregateWallets(trades: EnrichedTrade[]): Map<string, WalletAgg> {
         first_inflow_from: null,
         first_inflow_ts: null,
         funding_source: null,
+        bridge_origin_wallet: null,
       };
       map.set(w, agg);
     }
@@ -117,6 +119,17 @@ const CEX_SAME_TIGHT_MS = 7 * 24 * 60 * 60 * 1000;
 function pairwiseScore(a: WalletAgg, b: WalletAgg): PairScore {
   const factors: string[] = [];
   let s = 0;
+
+  // Phase 6b: same true origin on source chain (after Relay tracing).
+  // This unifies otherwise-disjoint proxy wallets back to one actor.
+  if (
+    a.bridge_origin_wallet &&
+    b.bridge_origin_wallet &&
+    a.bridge_origin_wallet === b.bridge_origin_wallet
+  ) {
+    s += 0.8;
+    factors.push(`same-bridge-origin:${a.bridge_origin_wallet.slice(0, 8)}…`);
+  }
 
   // Same direct funder (private wallet, not bridge/CEX) — strongest signal.
   if (
@@ -218,6 +231,7 @@ interface ProfileBits {
   first_inflow_from: string | null;
   first_inflow_ts: number | null;
   funding_source: FundingCategory;
+  bridge_origin_wallet: string | null;
 }
 
 async function profileWallets(wallets: string[]): Promise<Map<string, ProfileBits>> {
@@ -232,6 +246,7 @@ async function profileWallets(wallets: string[]): Promise<Map<string, ProfileBit
           first_inflow_from: null,
           first_inflow_ts: null,
           funding_source: null,
+          bridge_origin_wallet: null,
         });
         continue;
       }
@@ -241,6 +256,7 @@ async function profileWallets(wallets: string[]): Promise<Map<string, ProfileBit
         first_inflow_from: p.first_inflow_from ?? null,
         first_inflow_ts: p.first_meaningful_inflow_ts ?? null,
         funding_source: p.funding_source ?? null,
+        bridge_origin_wallet: p.bridge_origin_wallet ?? null,
       });
     } catch {
       out.set(w, {
@@ -249,6 +265,7 @@ async function profileWallets(wallets: string[]): Promise<Map<string, ProfileBit
         first_inflow_from: null,
         first_inflow_ts: null,
         funding_source: null,
+        bridge_origin_wallet: null,
       });
     }
   }
@@ -322,6 +339,7 @@ export async function checkMarket(conditionId: string, meta: MarketMeta): Promis
       agg.first_inflow_from = p.first_inflow_from;
       agg.first_inflow_ts = p.first_inflow_ts;
       agg.funding_source = p.funding_source;
+      agg.bridge_origin_wallet = p.bridge_origin_wallet;
     }
   }
 

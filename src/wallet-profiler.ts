@@ -2,7 +2,8 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 
 import { rpc } from "./alchemy-pool.js";
-import { classify, type FundingCategory } from "./funding-source.js";
+import { classify, categoryBucket, type FundingCategory } from "./funding-source.js";
+import { fetchEarliestRelayOrigin } from "./bridge-tracer.js";
 import { log, err } from "./log.js";
 
 const PATH = join(process.cwd(), "state", "wallet_profiles.json");
@@ -29,6 +30,11 @@ export interface WalletProfile {
   first_inflow_from: string | null;
   /** Classified category for the first inflow source. */
   funding_source: FundingCategory;
+  /** Origin wallet on a source chain that initiated the earliest Relay bridge to this proxy.
+   *  Populated only when funding_source is bridge:relay or unclassified. null otherwise. */
+  bridge_origin_wallet: string | null;
+  /** Chain id where bridge_origin_wallet lives. */
+  bridge_origin_chain: number | null;
   last_refreshed_iso: string;
   last_refreshed_ts: number;
 }
@@ -102,15 +108,31 @@ async function buildProfile(wallet: string): Promise<WalletProfile> {
     const ts = tsIso ? Date.parse(tsIso) : null;
     const ageDays = ts ? Math.floor((Date.now() - ts) / (24 * 60 * 60 * 1000)) : null;
     const fromLower = first?.from ? first.from.toLowerCase() : null;
+    const funding = fromLower ? classify(fromLower) : null;
+
+    // Phase 6b: trace bridge origin for relay-funded (or unclassified-sender) wallets.
+    let bridge_origin_wallet: string | null = null;
+    let bridge_origin_chain: number | null = null;
+    const bucket = categoryBucket(funding);
+    if (bucket === "bridge" || bucket === "private") {
+      const origin = await fetchEarliestRelayOrigin(lc);
+      if (origin) {
+        bridge_origin_wallet = origin.user;
+        bridge_origin_chain = origin.chain_id;
+      }
+    }
+
     return {
       wallet: lc,
       first_meaningful_inflow_iso: tsIso,
       first_meaningful_inflow_ts: ts,
       age_days: ageDays,
       score: computeScore(ageDays),
-      inflow_count: 0, // placeholder; we only fetched until first hit
+      inflow_count: 0,
       first_inflow_from: fromLower,
-      funding_source: fromLower ? classify(fromLower) : null,
+      funding_source: funding,
+      bridge_origin_wallet,
+      bridge_origin_chain,
       last_refreshed_iso: new Date().toISOString(),
       last_refreshed_ts: Date.now(),
     };

@@ -70,7 +70,7 @@ while IFS= read -r f; do
     src/trade-enricher.ts|src/clob-rest.ts)
       RESTART_ENRICHER=1
       ;;
-    src/wallet-profiler.ts|src/alchemy-pool.ts|src/funding-source.ts)
+    src/wallet-profiler.ts|src/alchemy-pool.ts|src/funding-source.ts|src/bridge-tracer.ts)
       RESTART_ENRICHER=1
       RESTART_CONTROL=1
       ;;
