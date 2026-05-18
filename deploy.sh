@@ -85,11 +85,11 @@ while IFS= read -r f; do
   esac
 done <<< "$CHANGED"
 
-# Ensure pm2 is running our procs (first deploy).
-pm2 describe pmw-market-discovery >/dev/null 2>&1 || pm2 start ecosystem.config.cjs --only pmw-market-discovery
-pm2 describe pmw-digest           >/dev/null 2>&1 || pm2 start ecosystem.config.cjs --only pmw-digest
-pm2 describe pmw-tg-control       >/dev/null 2>&1 || pm2 start ecosystem.config.cjs --only pmw-tg-control
-pm2 describe pmw-market-monitor   >/dev/null 2>&1 || pm2 start ecosystem.config.cjs --only pmw-market-monitor
+# Ensure ALL procs in ecosystem.config.cjs are running. pm2 start with the
+# config file is idempotent: running procs are left alone, new ones are started.
+# This catches "newly-added proc on first deploy of new commit" — important
+# because bash already loaded the old deploy.sh into memory before `git reset`.
+pm2 start ecosystem.config.cjs >/dev/null 2>&1 || true
 
 [ "$RESTART_DISCOVERY" = "1" ] && pm2 restart pmw-market-discovery && echo "restarted pmw-market-discovery"
 [ "$RESTART_DIGEST"    = "1" ] && pm2 restart pmw-digest          && echo "restarted pmw-digest"
