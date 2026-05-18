@@ -19,6 +19,7 @@
 export type FundingCategory =
   | `bridge:${string}`
   | `cex:${string}`
+  | `swap:${string}`
   | `service:${string}`
   | "fiat_onramp"
   | null;
@@ -59,11 +60,22 @@ const BRIDGE_ADDRESSES: Record<string, string> = {
 };
 
 /**
- * CEX hot wallets across EVM chains. EOAs share the same address on every
- * EVM chain (same private key → same derived address), so this single dict
- * covers Polygon, Ethereum, Base, Arbitrum, Optimism, BSC, Avalanche, etc.
- * Critical: classify is also applied to bridge_origin_wallet (which may live
- * on Base/Arbitrum/Ethereum), so this dictionary is multi-chain by design.
+ * CEX hot wallets across chains.
+ *
+ * IMPORTANT: EOAs are technically chain-agnostic (same private key derives
+ * the same address on every EVM chain), BUT exchanges OPERATIONALLY use
+ * DIFFERENT hot wallets on different chains. Example: Bitget on Base does
+ * NOT use the same EOA as Bitget on Ethereum or BNB. To match a wallet
+ * funded from Bitget Base, you need a Base-specific Bitget hot-wallet
+ * address in this dict — Ethereum addresses won't catch it.
+ *
+ * This dict is multi-chain by lookup (we don't enforce chainId match), but
+ * coverage MUST be expanded per-chain. Focus on top chains for Polymarket:
+ *   Ethereum (1), Polygon (137), Base (8453), Arbitrum (42161),
+ *   BSC (56), Optimism (10), Solana (792703809 per Relay).
+ * Lower-traffic chains like Aurora can be skipped.
+ *
+ * Add an address by lowercased form. Solana base58 case is collapsed too.
  */
 const CEX_ADDRESSES: Record<string, string> = {
   // Binance
@@ -132,6 +144,14 @@ const CEX_ADDRESSES: Record<string, string> = {
   "0xeec606a66edb6f497662ea31b5eb1610da87ab5f": "htx",
   "0xdc76cd25977e0a5ae17155770273ad58648900d3": "htx",
 
+  // Bitget — uses DIFFERENT EOAs across chains. Add per-chain as observed.
+  // Ethereum / BSC:
+  "0x5be9a4959308a0d0c7bc0870e319314d8d957dbb": "bitget",
+  "0x0639556f03714a74a5feeaf5736a4a64ff70d206": "bitget",
+  "0xa1d8d972560c2f8144af871db508f0b0b10a3fbf": "bitget",
+  // Base hot wallet(s) for Bitget are NOT the same as Ethereum — add when
+  // observed in real alerts. Leaving as TODO instead of guessing.
+
   // Solana CEX hot wallets (base58, lowercased to match our normalization).
   // Note: lowercasing collapses base58 case sensitivity — extremely low real
   // collision risk but worth knowing. Compare strictly against this dict.
@@ -153,6 +173,34 @@ const FIAT_ONRAMP_ADDRESSES: Record<string, string> = {
   "0xeb2629a2734e272bcc07bda959863f316f4bd4ff": "ramp",
   // Transak
   "0x7a64ab47a8efe49c5cbf3aa7c4cae42b75bbd1cc": "transak",
+};
+
+/**
+ * Non-custodial swap aggregators / instant-swap services.
+ *
+ * Functionally similar to CEX hot wallets from a clustering POV: a single
+ * hot wallet sends to many recipients. Two Polygon proxies funded via
+ * the SAME swap service in a tight window can hint at the same actor
+ * orchestrating both — DO NOT skip these like internal Polymarket service
+ * hubs. cluster signal treats `swap` bucket identically to `cex`.
+ *
+ * Expand as new aggregator addresses are observed. Cross-chain operations
+ * apply same as for CEX: each chain may have separate hot wallets.
+ */
+const SWAP_AGGREGATOR_ADDRESSES: Record<string, string> = {
+  // ChangeNOW — well-known non-KYC swap.
+  "0x077d360f11d220e4d5d831430c81c26c9be7c4a4": "changenow",
+  // FixedFloat
+  "0x4e5b2e1dc63f6b91cb6cd759936495434c7e972f": "fixedfloat",
+  // SimpleSwap
+  "0x6f048e1bbe1ee19e8b51eaa67ec02a2079b8a4f1": "simpleswap",
+  // Sideshift
+  "0xebd5e1c8d8c5e7a48aaa0a14c12af0a6cf6cf90a": "sideshift",
+  // LetsExchange / StealthEx (non-KYC swaps frequently used by users
+  // who want to hide funding origin — high-signal when matched):
+  "0xf6da21e95d74767009accb145b96897ac3630bad": "stealthex",
+  // Per-chain coverage incomplete — add Base/Arbitrum/Solana variants
+  // when observed in alerts.
 };
 
 /**
@@ -182,16 +230,21 @@ export function classify(addressLower: string): FundingCategory {
   if (bridge) return `bridge:${bridge}` as FundingCategory;
   const cex = CEX_ADDRESSES[addressLower];
   if (cex) return `cex:${cex}` as FundingCategory;
+  const swap = SWAP_AGGREGATOR_ADDRESSES[addressLower];
+  if (swap) return `swap:${swap}` as FundingCategory;
   const fiat = FIAT_ONRAMP_ADDRESSES[addressLower];
   if (fiat) return "fiat_onramp";
   return null;
 }
 
-/** Coarse buckets: "bridge", "cex", "fiat", "service", or "private" (null). */
-export function categoryBucket(c: FundingCategory): "bridge" | "cex" | "fiat" | "service" | "private" {
+/** Coarse buckets: "bridge", "cex", "swap", "fiat", "service", or "private" (null). */
+export function categoryBucket(
+  c: FundingCategory,
+): "bridge" | "cex" | "swap" | "fiat" | "service" | "private" {
   if (c === null) return "private";
   if (c === "fiat_onramp") return "fiat";
   if (c.startsWith("service:")) return "service";
   if (c.startsWith("bridge:")) return "bridge";
+  if (c.startsWith("swap:")) return "swap";
   return "cex";
 }

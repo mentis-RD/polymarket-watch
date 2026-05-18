@@ -135,15 +135,16 @@ function pairwiseScore(a: WalletAgg, b: WalletAgg): PairScore {
     if (originBucket === "private") {
       s += 0.8;
       factors.push(`same-bridge-origin:${a.bridge_origin_wallet.slice(0, 8)}…`);
-    } else if (originBucket === "cex") {
-      // Same exact CEX hot wallet on source chain — weak signal at best.
+    } else if (originBucket === "cex" || originBucket === "swap") {
+      // Same exact CEX/swap hot wallet on source chain — weak but real;
+      // ChangeNOW/Bitget hot funding two proxies = potentially same actor.
       s += 0.2;
-      factors.push(`same-cex-origin:${a.bridge_origin_funding_source}`);
+      factors.push(`same-${originBucket}-origin:${a.bridge_origin_funding_source}`);
     }
-    // bridge/service origin → no factor at all
+    // bridge/service/fiat origin → no factor (no info)
   }
 
-  // Same direct funder (private wallet, not bridge/CEX) — strongest signal.
+  // Same direct funder (private wallet, not bridge/CEX/swap) — strongest signal.
   if (
     a.first_inflow_from &&
     b.first_inflow_from &&
@@ -153,19 +154,20 @@ function pairwiseScore(a: WalletAgg, b: WalletAgg): PairScore {
     if (bucket === "private") {
       s += 0.8;
       factors.push(`same-funder:${a.first_inflow_from.slice(0, 8)}…`);
-    } else if (bucket === "cex") {
-      // Same exact CEX hot wallet — slightly less strong than private.
+    } else if (bucket === "cex" || bucket === "swap") {
+      // Same exact CEX hot wallet OR same exact swap aggregator — both
+      // suggest a tight link (one withdrawal funding both proxies).
       s += 0.5;
-      factors.push(`same-cex-hot:${a.funding_source}`);
+      factors.push(`same-${bucket}-hot:${a.funding_source}`);
     }
   } else if (
     a.funding_source !== null &&
     a.funding_source === b.funding_source &&
-    categoryBucket(a.funding_source) === "cex" &&
+    (categoryBucket(a.funding_source) === "cex" || categoryBucket(a.funding_source) === "swap") &&
     a.first_inflow_ts !== null &&
     b.first_inflow_ts !== null
   ) {
-    // Same CEX (any hot wallet of same CEX) within tight window.
+    // Same brand (any hot wallet of same CEX/swap) within tight window.
     const dt = Math.abs(a.first_inflow_ts - b.first_inflow_ts);
     if (dt <= CEX_SAME_TIGHT_MS) {
       s += 0.5;
