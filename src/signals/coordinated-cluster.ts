@@ -140,11 +140,15 @@ function pairwiseScore(a: WalletAgg, b: WalletAgg): PairScore {
       // ChangeNOW/Bitget hot funding two proxies = potentially same actor.
       s += 0.2;
       factors.push(`same-${originBucket}-origin:${a.bridge_origin_funding_source}`);
+    } else if (originBucket === "fiat") {
+      // Same fiat onramp hot on source chain — even weaker than CEX/swap.
+      s += 0.15;
+      factors.push(`same-fiat-origin:${a.bridge_origin_funding_source}`);
     }
-    // bridge/service/fiat origin → no factor (no info)
+    // bridge/service origin → no factor (no info)
   }
 
-  // Same direct funder (private wallet, not bridge/CEX/swap) — strongest signal.
+  // Same direct funder (private wallet, not a routed service) — strongest signal.
   if (
     a.first_inflow_from &&
     b.first_inflow_from &&
@@ -155,26 +159,42 @@ function pairwiseScore(a: WalletAgg, b: WalletAgg): PairScore {
       s += 0.8;
       factors.push(`same-funder:${a.first_inflow_from.slice(0, 8)}…`);
     } else if (bucket === "cex" || bucket === "swap") {
-      // Same exact CEX hot wallet OR same exact swap aggregator — both
-      // suggest a tight link (one withdrawal funding both proxies).
+      // Same exact CEX/swap hot wallet — one withdrawal funded both proxies.
       s += 0.5;
       factors.push(`same-${bucket}-hot:${a.funding_source}`);
+    } else if (bucket === "fiat") {
+      // Same fiat onramp hot wallet — weaker than CEX/swap because two
+      // people running KYC card purchases through the same MoonPay hot in
+      // tight window is genuinely rarer, but possible. Still a real link.
+      s += 0.4;
+      factors.push(`same-fiat-hot:${a.funding_source}`);
     }
   } else if (
     a.funding_source !== null &&
     a.funding_source === b.funding_source &&
-    (categoryBucket(a.funding_source) === "cex" || categoryBucket(a.funding_source) === "swap") &&
     a.first_inflow_ts !== null &&
     b.first_inflow_ts !== null
   ) {
-    // Same brand (any hot wallet of same CEX/swap) within tight window.
-    const dt = Math.abs(a.first_inflow_ts - b.first_inflow_ts);
-    if (dt <= CEX_SAME_TIGHT_MS) {
-      s += 0.5;
-      factors.push(`${a.funding_source}±${Math.round(dt / 86400000)}d`);
-    } else {
-      s += 0.1;
-      factors.push(`${a.funding_source}-far`);
+    // Same brand (any hot of same CEX/swap/fiat) within tight window.
+    const bucket = categoryBucket(a.funding_source);
+    if (bucket === "cex" || bucket === "swap") {
+      const dt = Math.abs(a.first_inflow_ts - b.first_inflow_ts);
+      if (dt <= CEX_SAME_TIGHT_MS) {
+        s += 0.5;
+        factors.push(`${a.funding_source}±${Math.round(dt / 86400000)}d`);
+      } else {
+        s += 0.1;
+        factors.push(`${a.funding_source}-far`);
+      }
+    } else if (bucket === "fiat") {
+      const dt = Math.abs(a.first_inflow_ts - b.first_inflow_ts);
+      if (dt <= CEX_SAME_TIGHT_MS) {
+        s += 0.4;
+        factors.push(`${a.funding_source}±${Math.round(dt / 86400000)}d`);
+      } else {
+        s += 0.05;
+        factors.push(`${a.funding_source}-far`);
+      }
     }
   }
 

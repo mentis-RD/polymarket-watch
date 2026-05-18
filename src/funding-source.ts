@@ -20,8 +20,8 @@ export type FundingCategory =
   | `bridge:${string}`
   | `cex:${string}`
   | `swap:${string}`
+  | `fiat:${string}`
   | `service:${string}`
-  | "fiat_onramp"
   | null;
 
 const BRIDGE_ADDRESSES: Record<string, string> = {
@@ -233,7 +233,7 @@ export function classify(addressLower: string): FundingCategory {
   const swap = SWAP_AGGREGATOR_ADDRESSES[addressLower];
   if (swap) return `swap:${swap}` as FundingCategory;
   const fiat = FIAT_ONRAMP_ADDRESSES[addressLower];
-  if (fiat) return "fiat_onramp";
+  if (fiat) return `fiat:${fiat}` as FundingCategory;
   return null;
 }
 
@@ -242,9 +242,9 @@ export function categoryBucket(
   c: FundingCategory,
 ): "bridge" | "cex" | "swap" | "fiat" | "service" | "private" {
   if (c === null) return "private";
-  if (c === "fiat_onramp") return "fiat";
   if (c.startsWith("service:")) return "service";
   if (c.startsWith("bridge:")) return "bridge";
   if (c.startsWith("swap:")) return "swap";
+  if (c.startsWith("fiat:")) return "fiat";
   return "cex";
 }
