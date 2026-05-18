@@ -19,8 +19,8 @@
 export type FundingCategory =
   | `bridge:${string}`
   | `cex:${string}`
+  | `service:${string}`
   | "fiat_onramp"
-  | "polymarket"
   | null;
 
 const BRIDGE_ADDRESSES: Record<string, string> = {
@@ -118,17 +118,29 @@ const FIAT_ONRAMP_ADDRESSES: Record<string, string> = {
   "0x7a64ab47a8efe49c5cbf3aa7c4cae42b75bbd1cc": "transak",
 };
 
-const POLYMARKET_INTERNAL: Record<string, string> = {
-  // Polymarket relayer / proxy factory / common internal addresses.
-  // Adding observed addresses here keeps "from polymarket itself" out of
-  // smart-money funding analytics.
-  "0xaacfeea03eb1561c4e67d661e40682bd20e3541b": "polymarket-proxy-factory",
+/**
+ * Shared service hot wallets — OTC desks, onramps, market makers, Polymarket-
+ * internal relayers. Anything that funds *many* unrelated end-user wallets.
+ *
+ * Critical for the cluster signal: two end-users sharing the SAME shared-
+ * service funder is NOT a coordination signal (would otherwise spuriously
+ * fire "same private funder = 0.8"). Add addresses here as you encounter
+ * funders with high recipient fan-out (eth_getCode = 0x and `from` in many
+ * transfers to disjoint users).
+ */
+const SHARED_SERVICE_ADDRESSES: Record<string, string> = {
+  // Discovered 2026-05-18: appears as first_inflow_from for both Theo4
+  // (top-profit) and Fredi9999 (#2 profit). 668 unique recipients in
+  // last 1000 transfers, volumes $118 to $2M — clearly a service hub,
+  // not a personal wallet. Likely Polymarket-related onramp/OTC.
+  "0x4b6f17856215eab57c29ebfa18b0a0f74a3627bb": "polymarket-distributor",
 };
 
 /** Classify a from-address. Always lowercased input. */
 export function classify(addressLower: string): FundingCategory {
   if (!addressLower) return null;
-  if (POLYMARKET_INTERNAL[addressLower]) return "polymarket";
+  const service = SHARED_SERVICE_ADDRESSES[addressLower];
+  if (service) return `service:${service}` as FundingCategory;
   const bridge = BRIDGE_ADDRESSES[addressLower];
   if (bridge) return `bridge:${bridge}` as FundingCategory;
   const cex = CEX_ADDRESSES[addressLower];
@@ -138,11 +150,11 @@ export function classify(addressLower: string): FundingCategory {
   return null;
 }
 
-/** Coarse buckets: "bridge", "cex", "fiat", "polymarket", or "private" (null). */
-export function categoryBucket(c: FundingCategory): "bridge" | "cex" | "fiat" | "polymarket" | "private" {
+/** Coarse buckets: "bridge", "cex", "fiat", "service", or "private" (null). */
+export function categoryBucket(c: FundingCategory): "bridge" | "cex" | "fiat" | "service" | "private" {
   if (c === null) return "private";
   if (c === "fiat_onramp") return "fiat";
-  if (c === "polymarket") return "polymarket";
+  if (c.startsWith("service:")) return "service";
   if (c.startsWith("bridge:")) return "bridge";
   return "cex";
 }
