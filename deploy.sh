@@ -95,6 +95,7 @@ while IFS= read -r f; do
     src/signals/fresh-wallet.ts) RESTART_ENRICHER=1 ;;
     src/signals/coordinated-cluster.ts) RESTART_ENRICHER=1 ;;
     src/signals/smart-money-cross-link.ts) RESTART_ENRICHER=1 ;;
+    src/signals/cross-market-correlation.ts) RESTART_ENRICHER=1 ;;
     src/signals/*)
       RESTART_MONITOR=1
       RESTART_ENRICHER=1

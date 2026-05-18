@@ -10,6 +10,7 @@ import * as watchlist from "./watchlist.js";
 import { handleEnrichedTrade } from "./signals/fresh-wallet.js";
 import { checkMarket as checkClusterMarket } from "./signals/coordinated-cluster.js";
 import { processBatch as processSmartMoneyBatch } from "./signals/smart-money-cross-link.js";
+import { runScan as runCrossMarketScan } from "./signals/cross-market-correlation.js";
 import { poolStatus } from "./alchemy-pool.js";
 import { heartbeat } from "./heartbeat.js";
 import { log, err } from "./log.js";
@@ -20,6 +21,7 @@ const LAST_TS_PATH = join(STATE_DIR, "enricher_last_ts.json");
 const POLL_MS = 60_000;
 const TRADES_PER_POLL = 100;
 const CLUSTER_CHECK_EVERY_CYCLES = 10; // cluster scan every ~10 minutes
+const CROSS_MARKET_CHECK_EVERY_CYCLES = 20; // cross-market scan every ~20 minutes
 const GLOBAL_POLL_MS = 30_000;
 const GLOBAL_POLL_LIMIT = 500;
 
@@ -139,6 +141,17 @@ async function pollLoop(): Promise<void> {
         } catch (e) {
           err("trade-enricher", `cluster check ${slug} failed`, (e as Error).message);
         }
+      }
+    }
+
+    // Cross-market correlation scan across ALL enriched activity (not just
+    // watchlist) — heavier, less frequent.
+    if (cycleNum % CROSS_MARKET_CHECK_EVERY_CYCLES === 0) {
+      try {
+        const r = await runCrossMarketScan();
+        log("trade-enricher", `cross-market: scanned ${r.wallets_scanned} wallets, ${r.alerts} alerts`);
+      } catch (e) {
+        err("trade-enricher", "cross-market scan failed", (e as Error).message);
       }
     }
 
