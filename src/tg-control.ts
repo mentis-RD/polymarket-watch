@@ -10,6 +10,7 @@ import { sendMessage } from "./telegram.js";
 import { heartbeat } from "./heartbeat.js";
 import { log, err } from "./log.js";
 import * as watchlist from "./watchlist.js";
+import { fetchMarketBySlug, parseClobTokenIds } from "./polymarket-api.js";
 
 const TOKEN = process.env.TG_TOKEN || "";
 const ALLOWED_CHAT = process.env.TG_CHAT_MAIN || "";
@@ -115,6 +116,23 @@ async function handleWatch(msg: TGMessage, args: string[]): Promise<void> {
     return;
   }
 
+  // Fetch fresh market data to get clob_token_ids and condition_id for monitor subscription.
+  let condition_id = "";
+  let clob_token_ids: string[] = [];
+  try {
+    const fresh = await fetchMarketBySlug(slug);
+    if (fresh) {
+      condition_id = fresh.conditionId || "";
+      clob_token_ids = parseClobTokenIds(fresh);
+    }
+  } catch (e) {
+    err("tg-control", `fetchMarketBySlug(${slug}) failed`, e);
+  }
+
+  if (clob_token_ids.length === 0) {
+    await reply(msg, `⚠️ \`${slug}\` has no clob_token_ids (market may not be tradable yet); monitor cannot subscribe`);
+  }
+
   if (watchlist.has(slug)) {
     await reply(msg, `ℹ️ \`${slug}\` already on watchlist; updating tag/reason`);
   }
@@ -126,6 +144,8 @@ async function handleWatch(msg: TGMessage, args: string[]): Promise<void> {
     reason,
     end_date: marketMeta.end_date,
     question: marketMeta.question,
+    condition_id,
+    clob_token_ids,
   });
 
   await reply(

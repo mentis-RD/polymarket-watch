@@ -40,7 +40,7 @@ git reset --hard origin/main
 if echo "$CHANGED" | grep -q -E "^(package\.json|package-lock\.json)$"; then
   echo "deps changed, running npm install"
   npm install --no-audit --no-fund
-  pm2 restart pmw-market-discovery pmw-digest pmw-tg-control || pm2 start ecosystem.config.cjs
+  pm2 restart pmw-market-discovery pmw-digest pmw-tg-control pmw-market-monitor || pm2 start ecosystem.config.cjs
   echo "[$(date -u +%FT%TZ)] full restart done"
   exit 0
 fi
@@ -49,25 +49,36 @@ fi
 RESTART_DISCOVERY=0
 RESTART_DIGEST=0
 RESTART_CONTROL=0
+RESTART_MONITOR=0
 
 while IFS= read -r f; do
   case "$f" in
     src/market-discovery.ts) RESTART_DISCOVERY=1 ;;
     src/digest.ts)           RESTART_DIGEST=1 ;;
-    src/tg-control.ts|src/watchlist.ts) RESTART_CONTROL=1 ;;
+    src/tg-control.ts) RESTART_CONTROL=1 ;;
+    src/watchlist.ts)
+      RESTART_CONTROL=1
+      RESTART_MONITOR=1
+      ;;
+    src/market-monitor.ts|src/clob-ws.ts|src/alert-cooldown.ts|src/signals/*)
+      RESTART_MONITOR=1
+      ;;
     src/polymarket-api.ts)
       RESTART_DISCOVERY=1
       RESTART_DIGEST=1
+      RESTART_CONTROL=1
       ;;
     src/telegram.ts|src/heartbeat.ts|src/log.ts)
       RESTART_DISCOVERY=1
       RESTART_DIGEST=1
       RESTART_CONTROL=1
+      RESTART_MONITOR=1
       ;;
     ecosystem.config.cjs)
       RESTART_DISCOVERY=1
       RESTART_DIGEST=1
       RESTART_CONTROL=1
+      RESTART_MONITOR=1
       ;;
     src/watchdog.ts) : ;; # cron-driven, no restart needed
     *) : ;;
@@ -78,10 +89,12 @@ done <<< "$CHANGED"
 pm2 describe pmw-market-discovery >/dev/null 2>&1 || pm2 start ecosystem.config.cjs --only pmw-market-discovery
 pm2 describe pmw-digest           >/dev/null 2>&1 || pm2 start ecosystem.config.cjs --only pmw-digest
 pm2 describe pmw-tg-control       >/dev/null 2>&1 || pm2 start ecosystem.config.cjs --only pmw-tg-control
+pm2 describe pmw-market-monitor   >/dev/null 2>&1 || pm2 start ecosystem.config.cjs --only pmw-market-monitor
 
 [ "$RESTART_DISCOVERY" = "1" ] && pm2 restart pmw-market-discovery && echo "restarted pmw-market-discovery"
 [ "$RESTART_DIGEST"    = "1" ] && pm2 restart pmw-digest          && echo "restarted pmw-digest"
 [ "$RESTART_CONTROL"   = "1" ] && pm2 restart pmw-tg-control      && echo "restarted pmw-tg-control"
+[ "$RESTART_MONITOR"   = "1" ] && pm2 restart pmw-market-monitor  && echo "restarted pmw-market-monitor"
 
 pm2 save >/dev/null 2>&1 || true
 echo "[$(date -u +%FT%TZ)] deploy done"

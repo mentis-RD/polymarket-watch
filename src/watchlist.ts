@@ -12,6 +12,9 @@ export interface WatchEntry {
   reason: string;
   end_date: string;
   question: string;
+  condition_id: string;
+  /** [yes_token_id, no_token_id] for CLOB WS subscription */
+  clob_token_ids: string[];
 }
 
 export type Watchlist = Record<string, WatchEntry>;

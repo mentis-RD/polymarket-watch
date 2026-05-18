@@ -50,5 +50,21 @@ module.exports = {
         NODE_ENV: "production",
       },
     },
+    {
+      name: "pmw-market-monitor",
+      script: "npx",
+      args: "tsx src/market-monitor.ts",
+      cwd: __dirname,
+      autorestart: true,
+      max_restarts: 50,
+      restart_delay: 5000,
+      kill_timeout: 10000,
+      out_file: "state/market-monitor.out.log",
+      error_file: "state/market-monitor.err.log",
+      time: true,
+      env: {
+        NODE_ENV: "production",
+      },
+    },
   ],
 };

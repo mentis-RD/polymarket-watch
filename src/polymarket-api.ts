@@ -38,6 +38,7 @@ export interface PolyMarket {
   volume1wk?: number;
   outcomes?: string;
   outcomePrices?: string;
+  clobTokenIds?: string;
   tags?: PolyTag[];
   events?: PolyEvent[];
 }
@@ -134,4 +135,30 @@ export function categoryFromTags(tags?: PolyTag[]): string {
   // Skip generic "All" tag, take first meaningful label.
   const meaningful = tags.filter((t) => t.label && t.label.toLowerCase() !== "all");
   return meaningful.map((t) => t.label).join("|");
+}
+
+export async function fetchMarketBySlug(slug: string): Promise<PolyMarket | null> {
+  const params = new URLSearchParams({ slug, include_tag: "true" });
+  const url = `${BASE}/markets?${params.toString()}`;
+  const res = await request(url);
+  if (res.statusCode !== 200) return null;
+  const data = (await res.body.json()) as PolyMarket[];
+  if (!Array.isArray(data) || data.length === 0) return null;
+  return data[0];
+}
+
+/**
+ * `market.clobTokenIds` is a stringified JSON array like '["123...", "456..."]'.
+ * Returns parsed token IDs (Yes/No) or empty array if missing/malformed.
+ */
+export function parseClobTokenIds(market: PolyMarket): string[] {
+  const raw = market.clobTokenIds;
+  if (!raw) return [];
+  try {
+    const arr = JSON.parse(raw);
+    if (Array.isArray(arr)) return arr.map(String);
+  } catch {
+    // fall through
+  }
+  return [];
 }
