@@ -40,7 +40,7 @@ git reset --hard origin/main
 if echo "$CHANGED" | grep -q -E "^(package\.json|package-lock\.json)$"; then
   echo "deps changed, running npm install"
   npm install --no-audit --no-fund
-  pm2 restart pmw-market-discovery pmw-digest pmw-tg-control pmw-market-monitor || pm2 start ecosystem.config.cjs
+  pm2 restart pmw-market-discovery pmw-digest pmw-tg-control pmw-market-monitor pmw-trade-enricher || pm2 start ecosystem.config.cjs
   echo "[$(date -u +%FT%TZ)] full restart done"
   exit 0
 fi
@@ -50,18 +50,33 @@ RESTART_DISCOVERY=0
 RESTART_DIGEST=0
 RESTART_CONTROL=0
 RESTART_MONITOR=0
+RESTART_ENRICHER=0
 
 while IFS= read -r f; do
   case "$f" in
     src/market-discovery.ts) RESTART_DISCOVERY=1 ;;
     src/digest.ts)           RESTART_DIGEST=1 ;;
-    src/tg-control.ts) RESTART_CONTROL=1 ;;
+    src/tg-control.ts)       RESTART_CONTROL=1 ;;
     src/watchlist.ts)
       RESTART_CONTROL=1
       RESTART_MONITOR=1
+      RESTART_ENRICHER=1
       ;;
-    src/market-monitor.ts|src/clob-ws.ts|src/alert-cooldown.ts|src/signals/*)
+    src/market-monitor.ts|src/clob-ws.ts)
       RESTART_MONITOR=1
+      ;;
+    src/trade-enricher.ts|src/clob-rest.ts|src/wallet-profiler.ts|src/alchemy-pool.ts)
+      RESTART_ENRICHER=1
+      ;;
+    src/alert-cooldown.ts)
+      RESTART_MONITOR=1
+      RESTART_ENRICHER=1
+      ;;
+    src/signals/volume-spike.ts) RESTART_MONITOR=1 ;;
+    src/signals/fresh-wallet.ts) RESTART_ENRICHER=1 ;;
+    src/signals/*)
+      RESTART_MONITOR=1
+      RESTART_ENRICHER=1
       ;;
     src/polymarket-api.ts)
       RESTART_DISCOVERY=1
@@ -73,12 +88,14 @@ while IFS= read -r f; do
       RESTART_DIGEST=1
       RESTART_CONTROL=1
       RESTART_MONITOR=1
+      RESTART_ENRICHER=1
       ;;
     ecosystem.config.cjs)
       RESTART_DISCOVERY=1
       RESTART_DIGEST=1
       RESTART_CONTROL=1
       RESTART_MONITOR=1
+      RESTART_ENRICHER=1
       ;;
     src/watchdog.ts) : ;; # cron-driven, no restart needed
     *) : ;;
@@ -95,6 +112,7 @@ pm2 start ecosystem.config.cjs >/dev/null 2>&1 || true
 [ "$RESTART_DIGEST"    = "1" ] && pm2 restart pmw-digest          && echo "restarted pmw-digest"
 [ "$RESTART_CONTROL"   = "1" ] && pm2 restart pmw-tg-control      && echo "restarted pmw-tg-control"
 [ "$RESTART_MONITOR"   = "1" ] && pm2 restart pmw-market-monitor  && echo "restarted pmw-market-monitor"
+[ "$RESTART_ENRICHER"  = "1" ] && pm2 restart pmw-trade-enricher  && echo "restarted pmw-trade-enricher"
 
 pm2 save >/dev/null 2>&1 || true
 echo "[$(date -u +%FT%TZ)] deploy done"

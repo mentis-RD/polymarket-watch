@@ -66,5 +66,21 @@ module.exports = {
         NODE_ENV: "production",
       },
     },
+    {
+      name: "pmw-trade-enricher",
+      script: "npx",
+      args: "tsx src/trade-enricher.ts",
+      cwd: __dirname,
+      autorestart: true,
+      max_restarts: 50,
+      restart_delay: 5000,
+      kill_timeout: 10000,
+      out_file: "state/trade-enricher.out.log",
+      error_file: "state/trade-enricher.err.log",
+      time: true,
+      env: {
+        NODE_ENV: "production",
+      },
+    },
   ],
 };
