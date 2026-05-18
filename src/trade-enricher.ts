@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { fetchTrades, type PolyTrade } from "./clob-rest.js";
 import * as watchlist from "./watchlist.js";
 import { handleEnrichedTrade } from "./signals/fresh-wallet.js";
+import { checkMarket as checkClusterMarket } from "./signals/coordinated-cluster.js";
 import { poolStatus } from "./alchemy-pool.js";
 import { heartbeat } from "./heartbeat.js";
 import { log, err } from "./log.js";
@@ -17,6 +18,7 @@ const ENRICHED_PATH = join(STATE_DIR, "trades_enriched.jsonl");
 const LAST_TS_PATH = join(STATE_DIR, "enricher_last_ts.json");
 const POLL_MS = 60_000;
 const TRADES_PER_POLL = 100;
+const CLUSTER_CHECK_EVERY_CYCLES = 10; // cluster scan every ~10 minutes
 
 interface LastTsMap {
   [conditionId: string]: number;
@@ -98,7 +100,9 @@ async function pollMarket(
 }
 
 async function pollLoop(): Promise<void> {
+  let cycleNum = 0;
   while (true) {
+    cycleNum++;
     const wl = watchlist.load();
     const slugs = Object.entries(wl).filter(([, e]) => e.condition_id);
     let totalNew = 0;
@@ -119,14 +123,31 @@ async function pollLoop(): Promise<void> {
     }
     if (totalNew > 0) saveLastTs(lastTs);
 
+    // Cluster checks are O(n²) per market with Alchemy lookups per wallet;
+    // run less often than per-cycle.
+    if (cycleNum % CLUSTER_CHECK_EVERY_CYCLES === 0) {
+      for (const [slug, entry] of slugs) {
+        try {
+          await checkClusterMarket(entry.condition_id, {
+            slug,
+            question: entry.question,
+            end_date: entry.end_date,
+          });
+        } catch (e) {
+          err("trade-enricher", `cluster check ${slug} failed`, (e as Error).message);
+        }
+      }
+    }
+
     const ps = poolStatus();
     heartbeat("trade-enricher", {
       watchlist_size: slugs.length,
       new_trades: totalNew,
       alchemy_keys: ps.keys,
       alchemy_exhausted: ps.exhausted,
+      cycle: cycleNum,
     });
-    log("trade-enricher", `cycle: watchlist=${slugs.length} new_trades=${totalNew}`);
+    log("trade-enricher", `cycle ${cycleNum}: watchlist=${slugs.length} new_trades=${totalNew}`);
     await sleep(POLL_MS);
   }
 }
