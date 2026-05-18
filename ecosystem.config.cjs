@@ -82,5 +82,21 @@ module.exports = {
         NODE_ENV: "production",
       },
     },
+    {
+      name: "pmw-resolution-tracker",
+      script: "npx",
+      args: "tsx src/resolution-tracker.ts",
+      cwd: __dirname,
+      autorestart: true,
+      max_restarts: 50,
+      restart_delay: 5000,
+      kill_timeout: 10000,
+      out_file: "state/resolution-tracker.out.log",
+      error_file: "state/resolution-tracker.err.log",
+      time: true,
+      env: {
+        NODE_ENV: "production",
+      },
+    },
   ],
 };

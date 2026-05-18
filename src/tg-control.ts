@@ -11,12 +11,14 @@ import { heartbeat } from "./heartbeat.js";
 import { log, err } from "./log.js";
 import * as watchlist from "./watchlist.js";
 import { fetchMarketBySlug, parseClobTokenIds } from "./polymarket-api.js";
+import { getProfile } from "./wallet-profiler.js";
 
 const TOKEN = process.env.TG_TOKEN || "";
 const ALLOWED_CHAT = process.env.TG_CHAT_MAIN || "";
 const STATE_DIR = join(process.cwd(), "state");
 const OFFSET_PATH = join(STATE_DIR, "tg_offset.txt");
 const SEEN_PATH = join(STATE_DIR, "seen_markets.json");
+const TRADES_ENRICHED_PATH = join(STATE_DIR, "trades_enriched.jsonl");
 
 const POLL_TIMEOUT_SEC = 25;
 const CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
@@ -193,9 +195,112 @@ async function handleHelp(msg: TGMessage): Promise<void> {
       "`/watch <slug> [HIGH|MED] [reason]` — add to watchlist",
       "`/unwatch <slug>` — remove from watchlist",
       "`/wl` — show current watchlist",
+      "`/profile <wallet>` — wallet profile + recent watchlist activity",
       "`/help` — this message",
     ].join("\n"),
   );
+}
+
+interface EnrichedTradeLine {
+  ts: number;
+  slug: string;
+  market: string;
+  wallet: string;
+  side: "BUY" | "SELL";
+  outcome: string;
+  outcomeIndex: 0 | 1;
+  price: number;
+  size: number;
+  notional: number;
+  tx: string;
+}
+
+function readWalletTrades(wallet: string, maxAgeMs = 30 * 24 * 60 * 60 * 1000): EnrichedTradeLine[] {
+  if (!existsSync(TRADES_ENRICHED_PATH)) return [];
+  const lc = wallet.toLowerCase();
+  const cutoff = Date.now() - maxAgeMs;
+  const out: EnrichedTradeLine[] = [];
+  const raw = readFileSync(TRADES_ENRICHED_PATH, "utf-8");
+  for (const line of raw.split("\n")) {
+    if (!line) continue;
+    try {
+      const t = JSON.parse(line) as EnrichedTradeLine;
+      if (t.wallet !== lc) continue;
+      if (t.ts < cutoff) continue;
+      out.push(t);
+    } catch {
+      /* skip */
+    }
+  }
+  return out.sort((a, b) => b.ts - a.ts);
+}
+
+function isAddress(s: string): boolean {
+  return /^0x[a-fA-F0-9]{40}$/.test(s);
+}
+
+async function handleProfile(msg: TGMessage, args: string[]): Promise<void> {
+  if (args.length === 0) {
+    await reply(msg, "usage: `/profile <wallet 0x...>`");
+    return;
+  }
+  const wallet = args[0];
+  if (!isAddress(wallet)) {
+    await reply(msg, `❌ \`${wallet}\` is not a valid 0x-address`);
+    return;
+  }
+  const lc = wallet.toLowerCase();
+
+  const profile = await getProfile(lc);
+  if (!profile) {
+    await reply(msg, `❌ profile fetch failed (Alchemy unreachable; no cache)`);
+    return;
+  }
+
+  const trades = readWalletTrades(lc, 30 * 24 * 60 * 60 * 1000);
+
+  const ageTxt =
+    profile.age_days === null
+      ? "no $1k+ USDC inflow on record"
+      : `${profile.age_days}d since first $1k+ USDC inflow`;
+
+  // Per-market net BUY notional 24h vs 30d.
+  const byMarket = new Map<string, { slug: string; buy_24h: number; buy_30d: number; sell_30d: number; last_ts: number }>();
+  const dayCutoff = Date.now() - 24 * 60 * 60 * 1000;
+  for (const t of trades) {
+    let m = byMarket.get(t.slug);
+    if (!m) {
+      m = { slug: t.slug, buy_24h: 0, buy_30d: 0, sell_30d: 0, last_ts: t.ts };
+      byMarket.set(t.slug, m);
+    }
+    if (t.side === "BUY") {
+      m.buy_30d += t.notional;
+      if (t.ts >= dayCutoff) m.buy_24h += t.notional;
+    } else {
+      m.sell_30d += t.notional;
+    }
+    if (t.ts > m.last_ts) m.last_ts = t.ts;
+  }
+
+  const marketLines = [...byMarket.values()]
+    .sort((a, b) => b.buy_30d - a.buy_30d)
+    .slice(0, 10)
+    .map((m) => {
+      const buy24 = m.buy_24h > 0 ? ` (24h: $${m.buy_24h.toFixed(0)})` : "";
+      return `• \`${m.slug}\` buy=$${m.buy_30d.toFixed(0)}${buy24} sell=$${m.sell_30d.toFixed(0)}`;
+    });
+
+  const lines = [
+    `👤 *Wallet profile* \`${lc}\``,
+    `score: ${profile.score}/10`,
+    ageTxt,
+    `https://polygonscan.com/address/${lc}`,
+    "",
+    `*recent watchlist trades (30d, ${trades.length} total):*`,
+    marketLines.length > 0 ? marketLines.join("\n") : "_no trades on watchlist markets_",
+  ];
+
+  await reply(msg, lines.join("\n"));
 }
 
 async function handleMessage(msg: TGMessage): Promise<void> {
@@ -217,6 +322,9 @@ async function handleMessage(msg: TGMessage): Promise<void> {
         break;
       case "wl":
         await handleWl(msg);
+        break;
+      case "profile":
+        await handleProfile(msg, parsed.args);
         break;
       case "help":
       case "start":
@@ -254,7 +362,9 @@ async function pollLoop(): Promise<void> {
       heartbeat("tg-control", { offset });
 
       if (Date.now() - lastCleanup > CLEANUP_INTERVAL_MS) {
-        const removed = watchlist.cleanupExpired(7);
+        // 14d grace: resolution tracker needs the watchlist entry to find
+        // condition_id; 7d was too tight if the tracker is briefly down.
+        const removed = watchlist.cleanupExpired(14);
         if (removed.length > 0) {
           log("tg-control", `auto-removed expired: ${removed.join(", ")}`);
         }

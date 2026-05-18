@@ -23,6 +23,7 @@ const PROCESSES: ProcessSpec[] = [
   { name: "tg-control", maxAgeMs: 5 * 60 * 1000 }, // 5 min (long-poll heartbeats per cycle)
   { name: "market-monitor", maxAgeMs: 5 * 60 * 1000 }, // 5 min (ticks every 1 min)
   { name: "trade-enricher", maxAgeMs: 5 * 60 * 1000 }, // 5 min (60s cycle)
+  { name: "resolution-tracker", maxAgeMs: 90 * 60 * 1000 }, // 90 min (1h cycle)
 ];
 
 const ALERT_COOLDOWN_MS = 30 * 60 * 1000; // 30 min between alerts per process

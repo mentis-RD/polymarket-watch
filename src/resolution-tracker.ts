@@ -1,0 +1,318 @@
+import { Agent, setGlobalDispatcher } from "undici";
+setGlobalDispatcher(new Agent({ connections: 300, pipelining: 10, keepAliveTimeout: 30_000 }));
+import "dotenv/config";
+
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+
+import * as watchlist from "./watchlist.js";
+import * as smartMoney from "./smart-money-db.js";
+import { fetchMarketBySlug } from "./polymarket-api.js";
+import { sendMessage } from "./telegram.js";
+import { heartbeat } from "./heartbeat.js";
+import { log, err } from "./log.js";
+
+const STATE_DIR = join(process.cwd(), "state");
+const RESOLUTIONS_PATH = join(STATE_DIR, "resolutions.json");
+const ENRICHED_PATH = join(STATE_DIR, "trades_enriched.jsonl");
+
+const CYCLE_MS = 60 * 60 * 1000; // 1h
+const WIN_PRICE_THRESHOLD = 0.2; // bought-at price for "early winner" classification
+const MIN_NOTIONAL = 100; // ignore dust positions
+
+interface ResolutionRecord {
+  condition_id: string;
+  slug: string;
+  resolved_at_iso: string;
+  resolved_at_ts: number;
+  winning_outcome: string;
+  winning_outcome_index: 0 | 1;
+  processed_at_ts: number;
+  winner_count: number;
+}
+
+type ResolutionsMap = Record<string, ResolutionRecord>; // keyed by condition_id
+
+interface EnrichedTrade {
+  ts: number;
+  slug: string;
+  market: string;
+  wallet: string;
+  side: "BUY" | "SELL";
+  outcome: string;
+  outcomeIndex: 0 | 1;
+  price: number;
+  size: number;
+  notional: number;
+}
+
+function loadResolutions(): ResolutionsMap {
+  if (!existsSync(RESOLUTIONS_PATH)) return {};
+  try {
+    return JSON.parse(readFileSync(RESOLUTIONS_PATH, "utf-8")) as ResolutionsMap;
+  } catch {
+    return {};
+  }
+}
+
+function saveResolutions(m: ResolutionsMap): void {
+  mkdirSync(STATE_DIR, { recursive: true });
+  writeFileSync(RESOLUTIONS_PATH, JSON.stringify(m, null, 2));
+}
+
+function parsePrices(raw?: string): number[] | null {
+  if (!raw) return null;
+  try {
+    const arr = JSON.parse(raw) as string[];
+    if (!Array.isArray(arr)) return null;
+    return arr.map(Number);
+  } catch {
+    return null;
+  }
+}
+
+function parseOutcomes(raw?: string): string[] | null {
+  if (!raw) return null;
+  try {
+    const arr = JSON.parse(raw) as string[];
+    if (!Array.isArray(arr)) return null;
+    return arr;
+  } catch {
+    return null;
+  }
+}
+
+/** Read all enriched trades for a specific condition_id. */
+function readTradesForMarket(conditionId: string): EnrichedTrade[] {
+  if (!existsSync(ENRICHED_PATH)) return [];
+  const out: EnrichedTrade[] = [];
+  const raw = readFileSync(ENRICHED_PATH, "utf-8");
+  for (const line of raw.split("\n")) {
+    if (!line) continue;
+    try {
+      const t = JSON.parse(line) as EnrichedTrade;
+      if (t.market === conditionId) out.push(t);
+    } catch {
+      /* skip */
+    }
+  }
+  return out;
+}
+
+interface WalletAggregate {
+  wallet: string;
+  buys_winning: { price: number; size: number; notional: number; ts: number }[];
+  sells_winning: { price: number; size: number; notional: number; ts: number }[];
+}
+
+function aggregateByWallet(trades: EnrichedTrade[], winningIdx: 0 | 1): Map<string, WalletAggregate> {
+  const map = new Map<string, WalletAggregate>();
+  for (const t of trades) {
+    if (t.outcomeIndex !== winningIdx) continue;
+    const w = t.wallet.toLowerCase();
+    let agg = map.get(w);
+    if (!agg) {
+      agg = { wallet: w, buys_winning: [], sells_winning: [] };
+      map.set(w, agg);
+    }
+    const entry = { price: t.price, size: t.size, notional: t.notional, ts: t.ts };
+    if (t.side === "BUY") agg.buys_winning.push(entry);
+    else agg.sells_winning.push(entry);
+  }
+  return map;
+}
+
+interface Winner {
+  wallet: string;
+  avg_bought_price: number;
+  net_size_held: number; // size held at resolution = buys - sells
+  notional_invested: number;
+  earliest_buy_ts: number;
+  multiple: number; // 1.0 / avg_bought_price
+}
+
+function identifyWinners(
+  trades: EnrichedTrade[],
+  winningIdx: 0 | 1,
+): Winner[] {
+  const byWallet = aggregateByWallet(trades, winningIdx);
+  const winners: Winner[] = [];
+
+  for (const agg of byWallet.values()) {
+    const totalBuySize = agg.buys_winning.reduce((s, b) => s + b.size, 0);
+    const totalSellSize = agg.sells_winning.reduce((s, b) => s + b.size, 0);
+    const netHeld = totalBuySize - totalSellSize;
+    if (netHeld <= 0) continue; // did not hold through resolution
+
+    const totalNotional = agg.buys_winning.reduce((s, b) => s + b.notional, 0);
+    const avgPrice = totalBuySize > 0 ? totalNotional / totalBuySize : 0;
+
+    if (avgPrice >= WIN_PRICE_THRESHOLD) continue; // not an "early" winner
+    if (totalNotional < MIN_NOTIONAL) continue; // too small
+
+    const earliest = agg.buys_winning.reduce((m, b) => Math.min(m, b.ts), Infinity);
+
+    winners.push({
+      wallet: agg.wallet,
+      avg_bought_price: avgPrice,
+      net_size_held: netHeld,
+      notional_invested: totalNotional,
+      earliest_buy_ts: earliest,
+      multiple: 1.0 / avgPrice,
+    });
+  }
+  return winners.sort((a, b) => b.notional_invested - a.notional_invested);
+}
+
+async function checkMarket(
+  slug: string,
+  conditionId: string,
+  resolutions: ResolutionsMap,
+): Promise<boolean> {
+  if (resolutions[conditionId]) return false;
+
+  const market = await fetchMarketBySlug(slug);
+  if (!market) {
+    err("resolution-tracker", `slug ${slug} not found in Gamma`);
+    return false;
+  }
+  if (!market.closed) return false; // not resolved yet
+
+  const prices = parsePrices(market.outcomePrices);
+  const outcomes = parseOutcomes(market.outcomes);
+  if (!prices || !outcomes || prices.length !== 2 || outcomes.length !== 2) {
+    err("resolution-tracker", `${slug}: malformed outcomePrices/outcomes`);
+    return false;
+  }
+  // Winning outcome has price ~= 1.0; treat anything >= 0.9 as winner.
+  let winningIdx: 0 | 1 = 0;
+  if (prices[1] > prices[0]) winningIdx = 1;
+  if (prices[winningIdx] < 0.9) {
+    // 50/50 split or unusual; skip processing.
+    log("resolution-tracker", `${slug}: no clear winner (prices=${prices.join(",")}); skip`);
+    return false;
+  }
+  const winningOutcome = outcomes[winningIdx];
+
+  const trades = readTradesForMarket(conditionId);
+  const winners = identifyWinners(trades, winningIdx);
+
+  // Persist resolution.
+  const resolvedTs = Date.parse(market.endDate || new Date().toISOString());
+  resolutions[conditionId] = {
+    condition_id: conditionId,
+    slug,
+    resolved_at_iso: market.endDate || new Date().toISOString(),
+    resolved_at_ts: Number.isFinite(resolvedTs) ? resolvedTs : Date.now(),
+    winning_outcome: winningOutcome,
+    winning_outcome_index: winningIdx,
+    processed_at_ts: Date.now(),
+    winner_count: winners.length,
+  };
+
+  // Add winners to smart-money DB.
+  for (const w of winners) {
+    smartMoney.recordWin(w.wallet, {
+      ts: w.earliest_buy_ts,
+      slug,
+      market: conditionId,
+      outcome: winningOutcome,
+      outcomeIndex: winningIdx,
+      avg_bought_price: w.avg_bought_price,
+      size: w.net_size_held,
+      notional: w.notional_invested,
+      multiple: w.multiple,
+    });
+  }
+
+  await sendRecap(slug, market.question || slug, winningOutcome, winners);
+  log("resolution-tracker", `processed ${slug}: ${winners.length} winners; outcome=${winningOutcome}`);
+  return true;
+}
+
+async function sendRecap(
+  slug: string,
+  question: string,
+  outcome: string,
+  winners: Winner[],
+): Promise<void> {
+  const chat = process.env.TG_CHAT_MAIN;
+  const thread = process.env.TG_THREAD_RESOLUTION;
+  if (!chat) return;
+
+  const top = winners.slice(0, 10).map((w) => {
+    const short = w.wallet.slice(0, 6) + "…" + w.wallet.slice(-4);
+    return `• \`${short}\` ${w.multiple.toFixed(1)}× ($${w.notional_invested.toFixed(0)} @${w.avg_bought_price.toFixed(2)})`;
+  });
+
+  const text = [
+    `📊 *Resolution* — \`${slug}\` → *${outcome}*`,
+    `_${question}_`,
+    "",
+    winners.length > 0
+      ? `*Early winners (bought < ${WIN_PRICE_THRESHOLD}, held through, >$${MIN_NOTIONAL}):* ${winners.length}`
+      : "_no early winners on our enriched data_",
+    ...top,
+    "",
+    `https://polymarket.com/market/${slug}`,
+  ].join("\n");
+
+  await sendMessage({
+    chatId: chat,
+    threadId: thread || undefined,
+    text,
+    parseMode: "Markdown",
+  });
+}
+
+async function cycle(): Promise<void> {
+  const wl = watchlist.load();
+  const resolutions = loadResolutions();
+  const now = Date.now();
+  let processed = 0;
+
+  for (const [slug, entry] of Object.entries(wl)) {
+    if (!entry.condition_id) continue;
+    if (!entry.end_date) continue;
+    const endTs = Date.parse(entry.end_date);
+    if (!Number.isFinite(endTs)) continue;
+    if (endTs > now) continue; // not yet ended
+    if (resolutions[entry.condition_id]) continue;
+    try {
+      const ok = await checkMarket(slug, entry.condition_id, resolutions);
+      if (ok) processed++;
+    } catch (e) {
+      err("resolution-tracker", `checkMarket ${slug} failed`, e);
+    }
+  }
+
+  if (processed > 0) saveResolutions(resolutions);
+
+  heartbeat("resolution-tracker", {
+    watchlist_size: Object.keys(wl).length,
+    processed_total: Object.keys(resolutions).length,
+    processed_this_cycle: processed,
+  });
+  log("resolution-tracker", `cycle: processed=${processed} total=${Object.keys(resolutions).length}`);
+}
+
+async function main(): Promise<void> {
+  log("resolution-tracker", "starting");
+  while (true) {
+    try {
+      await cycle();
+    } catch (e) {
+      err("resolution-tracker", "cycle failed", e);
+    }
+    await sleep(CYCLE_MS);
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+main().catch((e) => {
+  err("resolution-tracker", "fatal", e);
+  process.exit(1);
+});
