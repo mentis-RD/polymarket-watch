@@ -1,0 +1,15 @@
+{
+  "0xf70da97812cb96acdf810712aa562db8dfa3dbef": "relay",
+  "0xa5f565650890fba1824ee0f21ebbbf660a179934": "relay",
+  "0xeeeeeeee0f33b87a3df9f8eaccbe4f6e2a39f7fc": "relay",
+  "0x9295ee1d8c5b022be115a2ad3c30c72e34e7f096": "across",
+  "0x45a01e4e04f14f7a4a6702c74187c5f6222033cd": "stargate",
+  "0x1205f31718499dbf1fca446663b532ef87481fe1": "stargate",
+  "0x5a58505a96d1dbf8df91cb21b54419fc36e93fde": "wormhole",
+  "0x40ec5b33f54e0e8a33a975908c5ba1c14e5bbbdf": "polygon-pos",
+  "0x76b22b8c1079a44f1211d867d68b1eda76a635a7": "hop",
+  "0x8f5bbb2bb8c2ee94639e55d5f41de9b4839c1280": "synapse",
+  "0x3a23f943181408eac424116af7b7790c94cb97a5": "bungee",
+  "0xef4fb24ad0916217251f553c0596f8edc630eb66": "debridge",
+  "0xce16f69375520ab01377ce7b88f5ba8c48f8d666": "squid"
+}

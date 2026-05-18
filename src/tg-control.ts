@@ -12,6 +12,7 @@ import { log, err } from "./log.js";
 import * as watchlist from "./watchlist.js";
 import { fetchMarketBySlug, parseClobTokenIds } from "./polymarket-api.js";
 import { getProfile } from "./wallet-profiler.js";
+import { dictSizes } from "./funding-source.js";
 
 const TOKEN = process.env.TG_TOKEN || "";
 const ALLOWED_CHAT = process.env.TG_CHAT_MAIN || "";
@@ -196,9 +197,117 @@ async function handleHelp(msg: TGMessage): Promise<void> {
       "`/unwatch <slug>` — remove from watchlist",
       "`/wl` — show current watchlist",
       "`/profile <wallet>` — wallet profile + recent watchlist activity",
+      "`/scan_unknowns [min_fanout]` — high fan-out funders not in any dict (default min=3)",
       "`/help` — this message",
     ].join("\n"),
   );
+}
+
+interface CachedWalletProfile {
+  wallet: string;
+  first_inflow_from?: string | null;
+  funding_source?: string | null;
+  bridge_origin_wallet?: string | null;
+  bridge_origin_chain?: number | null;
+  bridge_origin_funding_source?: string | null;
+}
+
+const WALLET_PROFILES_PATH = join(STATE_DIR, "wallet_profiles.json");
+
+function loadAllProfiles(): CachedWalletProfile[] {
+  if (!existsSync(WALLET_PROFILES_PATH)) return [];
+  try {
+    const obj = JSON.parse(readFileSync(WALLET_PROFILES_PATH, "utf-8")) as Record<
+      string,
+      CachedWalletProfile
+    >;
+    return Object.values(obj);
+  } catch {
+    return [];
+  }
+}
+
+async function handleScanUnknowns(msg: TGMessage, args: string[]): Promise<void> {
+  const minFanout = Math.max(2, Math.min(50, Number(args[0]) || 3));
+  const profiles = loadAllProfiles();
+  const sizes = dictSizes();
+
+  if (profiles.length === 0) {
+    await reply(
+      msg,
+      `🔎 wallet_profiles cache is empty (${profiles.length}). Run for a while with watchlist active.\n_dicts: cex=${sizes.cex} bridge=${sizes.bridge} swap=${sizes.swap} fiat=${sizes.fiat} service=${sizes.service}_`,
+    );
+    return;
+  }
+
+  // 1) Direct-funder candidates: first_inflow_from groups when funding_source is null.
+  const directBuckets = new Map<string, string[]>();
+  // 2) Bridge-origin candidates: bridge_origin_wallet groups when origin_source is null.
+  const bridgeBuckets = new Map<string, { wallets: string[]; chains: Set<number> }>();
+
+  for (const p of profiles) {
+    if (
+      (p.funding_source === null || p.funding_source === undefined) &&
+      p.first_inflow_from
+    ) {
+      const arr = directBuckets.get(p.first_inflow_from) ?? [];
+      arr.push(p.wallet);
+      directBuckets.set(p.first_inflow_from, arr);
+    }
+    if (
+      (p.bridge_origin_funding_source === null ||
+        p.bridge_origin_funding_source === undefined) &&
+      p.bridge_origin_wallet
+    ) {
+      const entry =
+        bridgeBuckets.get(p.bridge_origin_wallet) ?? { wallets: [], chains: new Set<number>() };
+      entry.wallets.push(p.wallet);
+      if (p.bridge_origin_chain) entry.chains.add(p.bridge_origin_chain);
+      bridgeBuckets.set(p.bridge_origin_wallet, entry);
+    }
+  }
+
+  const direct = [...directBuckets.entries()]
+    .map(([addr, ws]) => ({ addr, count: ws.length, sample: ws[0] }))
+    .filter((r) => r.count >= minFanout)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 10);
+
+  const bridge = [...bridgeBuckets.entries()]
+    .map(([addr, e]) => ({
+      addr,
+      count: e.wallets.length,
+      sample: e.wallets[0],
+      chains: [...e.chains].join(","),
+    }))
+    .filter((r) => r.count >= minFanout)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 10);
+
+  const lines: string[] = [
+    `🔎 *Unknown funders* (min fan-out ${minFanout}, scanned ${profiles.length} profiles)`,
+    `_dicts: cex=${sizes.cex} bridge=${sizes.bridge} swap=${sizes.swap} fiat=${sizes.fiat} service=${sizes.service}_`,
+    "",
+    `*Direct funders (sender of first \\$1k+ USDC):* ${direct.length || "—"}`,
+  ];
+  for (const r of direct) {
+    lines.push(
+      `• \`${r.addr}\` × ${r.count}  (e.g. \`${r.sample.slice(0, 6)}…${r.sample.slice(-4)}\`)`,
+    );
+  }
+  lines.push("");
+  lines.push(`*Bridge origins (Relay-traced user on source chain):* ${bridge.length || "—"}`);
+  for (const r of bridge) {
+    lines.push(
+      `• \`${r.addr}\` × ${r.count} chains:${r.chains || "?"}  (e.g. \`${r.sample.slice(0, 6)}…${r.sample.slice(-4)}\`)`,
+    );
+  }
+  lines.push("");
+  lines.push(
+    "_Look each address up on the matching block explorer. If it's a CEX/swap/fiat/service, add to the right `addresses/<chain>-<category>.json` and push._",
+  );
+
+  await reply(msg, lines.join("\n"));
 }
 
 interface EnrichedTradeLine {
@@ -325,6 +434,10 @@ async function handleMessage(msg: TGMessage): Promise<void> {
         break;
       case "profile":
         await handleProfile(msg, parsed.args);
+        break;
+      case "scan_unknowns":
+      case "scanunknowns":
+        await handleScanUnknowns(msg, parsed.args);
         break;
       case "help":
       case "start":

@@ -74,6 +74,12 @@ while IFS= read -r f; do
       RESTART_ENRICHER=1
       RESTART_CONTROL=1
       ;;
+    addresses/*.json)
+      # funding-source.ts reads these at module init — restart consumers
+      # so newly-added CEX/swap/etc entries take effect without a code commit.
+      RESTART_ENRICHER=1
+      RESTART_CONTROL=1
+      ;;
     src/resolution-tracker.ts)
       RESTART_RESOLUTION=1
       ;;

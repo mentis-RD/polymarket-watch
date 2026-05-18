@@ -1,0 +1,3 @@
+{
+  "_comment": "Base hot wallets are DIFFERENT EOAs from Ethereum/BSC for most exchanges. Coverage is currently sparse; expand by running /scan_unknowns and looking up the high-fan-out addresses on Basescan."
+}

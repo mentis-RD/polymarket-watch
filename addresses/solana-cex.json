@@ -1,0 +1,12 @@
+{
+  "_comment": "Solana base58 addresses lowercased. Case collapse is safe in practice (~0 collision risk on 32-44 char addresses).",
+  "5tzfkikscxhk5zxcgbxzxdw7gtjjd1mbwuofbhuvuai9": "binance",
+  "9un5wqe3q4ag8bni4dhhpxfluMrubqxgnzuyxmjphsbt": "binance",
+  "9wzdxwbbmkg8ztbnmquxvqraygzzdsgydlvl9zytawwm": "binance",
+  "h8smjscqxfkiftcfdr3dumlpwcrbm61lgfj8n4dk3wjs": "coinbase",
+  "2aqdphj2jpcegpiatuxjqxa8qmaffegfqwslwsprpicm": "coinbase",
+  "fpwqqhqqoeavu3wu2qzmff1hx48yyfwsLorgxg83e99t": "coinbase",
+  "fwznbcnxwquhtawe9rxvq2ldcenssh12dsznf4riouN5": "kraken",
+  "5vcwktcxgcj6kit5fybxjvriw3xelsfdhyrpsqtjnmcd": "okx",
+  "8sgbxz3yrq9zdwzehywzqyiua9adn8jmidodzlh2cmav": "bybit"
+}

@@ -1,0 +1,4 @@
+{
+  "_comment": "Fan-out hubs whose funder identity carries zero clustering signal. Polymarket onramp distributor and similar internal relayers. Add an address here when /scan_unknowns shows it has hundreds of unique recipients and on-chain inspection confirms it is a routing service (NOT a CEX/swap, those go in their respective files).",
+  "0x4b6f17856215eab57c29ebfa18b0a0f74a3627bb": "polymarket-distributor"
+}

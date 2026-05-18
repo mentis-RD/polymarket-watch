@@ -1,0 +1,8 @@
+{
+  "_comment": "Non-custodial swap aggregators. Per Phase 6 fix, these score same as CEX in cluster (not zero like service). Expand per-chain coverage as observed.",
+  "0x077d360f11d220e4d5d831430c81c26c9be7c4a4": "changenow",
+  "0x4e5b2e1dc63f6b91cb6cd759936495434c7e972f": "fixedfloat",
+  "0x6f048e1bbe1ee19e8b51eaa67ec02a2079b8a4f1": "simpleswap",
+  "0xebd5e1c8d8c5e7a48aaa0a14c12af0a6cf6cf90a": "sideshift",
+  "0xf6da21e95d74767009accb145b96897ac3630bad": "stealthex"
+}

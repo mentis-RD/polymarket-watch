@@ -1,0 +1,22 @@
+{
+  "0x28c6c06298d514db089934071355e5743bf21d60": "binance",
+  "0x8d97689c9818892b700e27f316cc3e41e17fbeb9": "binance",
+  "0xbd612a3f30dca67bf60a39fd0d35e39b7ab80774": "binance",
+  "0xa180fe01b906a1be37be6c534a3300785b20d947": "binance",
+  "0xb4d12f10c34acbbd16d5b22dadeb09bd9d8f9c81": "binance",
+  "0xd0a3a8b14b30a3a8b048bbb37086a3afff79e21d": "binance",
+  "0xa9d1e08c7793af67e9d92fe308d5697fb81d3e43": "coinbase",
+  "0x6b76f8b1e9e59913bfe758821887311ba1805cab": "coinbase",
+  "0xd34d96e1be88a8e4e8bb37dc8c7e02fe1cbaba47": "coinbase",
+  "0x236f9f97e0e62388479bf9e5ba4889e46b0273c3": "okx",
+  "0x6cc5f688a315f3dc28a7781717a9a798a59fda7b": "okx",
+  "0x267be1c1d684f78cb4f6a176c4911b741e4ffdc0": "kraken",
+  "0x53d284357ec70ce289d6d64134dfac8e511c8a3d": "kraken",
+  "0xa7a93fd0a276fc1c0197a5b5623ed117786eed06": "bybit",
+  "0x0d0707963952f2fba59dd06f2b425ace40b492fe": "gate",
+  "0x2933782b5a8d72f2754103d1489614f29bfa4625": "kucoin",
+  "0xdc76cd25977e0a5ae17155770273ad58648900d3": "htx",
+  "0x5be9a4959308a0d0c7bc0870e319314d8d957dbb": "bitget",
+  "0x0639556f03714a74a5feeaf5736a4a64ff70d206": "bitget",
+  "0xa1d8d972560c2f8144af871db508f0b0b10a3fbf": "bitget"
+}
