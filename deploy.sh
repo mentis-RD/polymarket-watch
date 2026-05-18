@@ -36,11 +36,11 @@ echo "$CHANGED" | sed 's/^/  /'
 
 git reset --hard origin/main
 
-# If package.json changed, npm install + restart all.
+# If package.json changed, npm install + restart all of OUR procs only.
 if echo "$CHANGED" | grep -q -E "^(package\.json|package-lock\.json)$"; then
   echo "deps changed, running npm install"
   npm install --no-audit --no-fund
-  pm2 restart all || pm2 start ecosystem.config.cjs
+  pm2 restart pmw-market-discovery pmw-digest pmw-tg-control || pm2 start ecosystem.config.cjs
   echo "[$(date -u +%FT%TZ)] full restart done"
   exit 0
 fi
@@ -75,13 +75,13 @@ while IFS= read -r f; do
 done <<< "$CHANGED"
 
 # Ensure pm2 is running our procs (first deploy).
-pm2 describe market-discovery >/dev/null 2>&1 || pm2 start ecosystem.config.cjs --only market-discovery
-pm2 describe digest          >/dev/null 2>&1 || pm2 start ecosystem.config.cjs --only digest
-pm2 describe tg-control      >/dev/null 2>&1 || pm2 start ecosystem.config.cjs --only tg-control
+pm2 describe pmw-market-discovery >/dev/null 2>&1 || pm2 start ecosystem.config.cjs --only pmw-market-discovery
+pm2 describe pmw-digest           >/dev/null 2>&1 || pm2 start ecosystem.config.cjs --only pmw-digest
+pm2 describe pmw-tg-control       >/dev/null 2>&1 || pm2 start ecosystem.config.cjs --only pmw-tg-control
 
-[ "$RESTART_DISCOVERY" = "1" ] && pm2 restart market-discovery && echo "restarted market-discovery"
-[ "$RESTART_DIGEST"    = "1" ] && pm2 restart digest          && echo "restarted digest"
-[ "$RESTART_CONTROL"   = "1" ] && pm2 restart tg-control      && echo "restarted tg-control"
+[ "$RESTART_DISCOVERY" = "1" ] && pm2 restart pmw-market-discovery && echo "restarted pmw-market-discovery"
+[ "$RESTART_DIGEST"    = "1" ] && pm2 restart pmw-digest          && echo "restarted pmw-digest"
+[ "$RESTART_CONTROL"   = "1" ] && pm2 restart pmw-tg-control      && echo "restarted pmw-tg-control"
 
 pm2 save >/dev/null 2>&1 || true
 echo "[$(date -u +%FT%TZ)] deploy done"

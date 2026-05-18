@@ -1,7 +1,9 @@
+// All process names are prefixed with `pmw-` to avoid collisions with other
+// projects on the same server (e.g. dork-track has its own `tg-control`).
 module.exports = {
   apps: [
     {
-      name: "market-discovery",
+      name: "pmw-market-discovery",
       script: "npx",
       args: "tsx src/market-discovery.ts",
       cwd: __dirname,
@@ -17,7 +19,7 @@ module.exports = {
       },
     },
     {
-      name: "digest",
+      name: "pmw-digest",
       script: "npx",
       args: "tsx src/digest.ts",
       cwd: __dirname,
@@ -33,7 +35,7 @@ module.exports = {
       },
     },
     {
-      name: "tg-control",
+      name: "pmw-tg-control",
       script: "npx",
       args: "tsx src/tg-control.ts",
       cwd: __dirname,
