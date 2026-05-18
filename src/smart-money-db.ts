@@ -17,7 +17,11 @@ export interface WinRecord {
 
 export interface SmartMoneyEntry {
   first_added_ts: number;
-  added_by: "post_mortem" | "dune_seed" | "manual";
+  added_by: "post_mortem" | "leaderboard_profit" | "leaderboard_volume" | "manual";
+  /** Optional leaderboard metric value at seed time (lifetime profit or volume in USD). */
+  seed_amount?: number;
+  /** Optional public pseudonym from Polymarket leaderboard. */
+  pseudonym?: string;
   wins: WinRecord[];
 }
 
@@ -56,4 +60,45 @@ export function recordWin(wallet: string, win: WinRecord): void {
 
 export function has(wallet: string): boolean {
   return wallet.toLowerCase() in load();
+}
+
+export function get(wallet: string): SmartMoneyEntry | null {
+  return load()[wallet.toLowerCase()] ?? null;
+}
+
+export interface SeedRow {
+  wallet: string;
+  pseudonym?: string;
+  amount: number;
+  added_by: "leaderboard_profit" | "leaderboard_volume";
+}
+
+/** Bulk-add entries, preserving any existing wins. Returns count of new additions. */
+export function bulkAdd(rows: SeedRow[]): number {
+  const db = load();
+  const now = Date.now();
+  let added = 0;
+  for (const r of rows) {
+    const lc = r.wallet.toLowerCase();
+    if (db[lc]) {
+      // Keep existing; update pseudonym/seed_amount only if missing.
+      if (!db[lc].pseudonym && r.pseudonym) db[lc].pseudonym = r.pseudonym;
+      if (db[lc].seed_amount === undefined) db[lc].seed_amount = r.amount;
+      continue;
+    }
+    db[lc] = {
+      first_added_ts: now,
+      added_by: r.added_by,
+      seed_amount: r.amount,
+      pseudonym: r.pseudonym,
+      wins: [],
+    };
+    added++;
+  }
+  save(db);
+  return added;
+}
+
+export function size(): number {
+  return Object.keys(load()).length;
 }

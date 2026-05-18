@@ -5,10 +5,11 @@ import "dotenv/config";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { fetchTrades, type PolyTrade } from "./clob-rest.js";
+import { fetchTrades, fetchRecentTrades, type PolyTrade } from "./clob-rest.js";
 import * as watchlist from "./watchlist.js";
 import { handleEnrichedTrade } from "./signals/fresh-wallet.js";
 import { checkMarket as checkClusterMarket } from "./signals/coordinated-cluster.js";
+import { processBatch as processSmartMoneyBatch } from "./signals/smart-money-cross-link.js";
 import { poolStatus } from "./alchemy-pool.js";
 import { heartbeat } from "./heartbeat.js";
 import { log, err } from "./log.js";
@@ -19,6 +20,8 @@ const LAST_TS_PATH = join(STATE_DIR, "enricher_last_ts.json");
 const POLL_MS = 60_000;
 const TRADES_PER_POLL = 100;
 const CLUSTER_CHECK_EVERY_CYCLES = 10; // cluster scan every ~10 minutes
+const GLOBAL_POLL_MS = 30_000;
+const GLOBAL_POLL_LIMIT = 500;
 
 interface LastTsMap {
   [conditionId: string]: number;
@@ -156,8 +159,23 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+async function globalPollLoop(): Promise<void> {
+  while (true) {
+    try {
+      const trades = await fetchRecentTrades({ limit: GLOBAL_POLL_LIMIT });
+      await processSmartMoneyBatch(trades);
+    } catch (e) {
+      err("trade-enricher", "global poll failed", (e as Error).message);
+    }
+    await sleep(GLOBAL_POLL_MS);
+  }
+}
+
 log("trade-enricher", "starting");
 pollLoop().catch((e) => {
   err("trade-enricher", "fatal", e);
   process.exit(1);
+});
+globalPollLoop().catch((e) => {
+  err("trade-enricher", "global loop fatal", e);
 });

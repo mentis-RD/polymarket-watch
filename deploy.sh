@@ -74,8 +74,12 @@ while IFS= read -r f; do
       RESTART_ENRICHER=1
       RESTART_CONTROL=1
       ;;
-    src/resolution-tracker.ts|src/smart-money-db.ts)
+    src/resolution-tracker.ts)
       RESTART_RESOLUTION=1
+      ;;
+    src/smart-money-db.ts)
+      RESTART_RESOLUTION=1
+      RESTART_ENRICHER=1
       ;;
     src/alert-cooldown.ts)
       RESTART_MONITOR=1
@@ -84,6 +88,7 @@ while IFS= read -r f; do
     src/signals/volume-spike.ts) RESTART_MONITOR=1 ;;
     src/signals/fresh-wallet.ts) RESTART_ENRICHER=1 ;;
     src/signals/coordinated-cluster.ts) RESTART_ENRICHER=1 ;;
+    src/signals/smart-money-cross-link.ts) RESTART_ENRICHER=1 ;;
     src/signals/*)
       RESTART_MONITOR=1
       RESTART_ENRICHER=1
