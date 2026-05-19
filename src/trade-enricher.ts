@@ -2,8 +2,10 @@ import { Agent, setGlobalDispatcher } from "undici";
 setGlobalDispatcher(new Agent({ connections: 300, pipelining: 10, keepAliveTimeout: 30_000 }));
 import "dotenv/config";
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, appendFileSync, statSync, renameSync } from "node:fs";
 import { join } from "node:path";
+
+import { writeJsonAtomic } from "./atomic-write.js";
 
 import { fetchTrades, fetchRecentTrades, type PolyTrade } from "./clob-rest.js";
 import * as watchlist from "./watchlist.js";
@@ -24,6 +26,9 @@ const CLUSTER_CHECK_EVERY_CYCLES = 10; // cluster scan every ~10 minutes
 const CROSS_MARKET_CHECK_EVERY_CYCLES = 20; // cross-market scan every ~20 minutes
 const GLOBAL_POLL_MS = 30_000;
 const GLOBAL_POLL_LIMIT = 500;
+const ENRICHED_ROTATE_BYTES = 200 * 1024 * 1024; // 200 MB cap before archival
+const ROTATE_CHECK_EVERY_MS = 60 * 60 * 1000; // once an hour
+let lastRotateCheckTs = 0;
 
 interface LastTsMap {
   [conditionId: string]: number;
@@ -39,11 +44,11 @@ function loadLastTs(): LastTsMap {
 }
 
 function saveLastTs(m: LastTsMap): void {
-  mkdirSync(STATE_DIR, { recursive: true });
-  writeFileSync(LAST_TS_PATH, JSON.stringify(m, null, 2));
+  writeJsonAtomic(LAST_TS_PATH, m);
 }
 
 function appendEnriched(trade: PolyTrade & { slug: string }): void {
+  mkdirSync(STATE_DIR, { recursive: true });
   appendFileSync(
     ENRICHED_PATH,
     JSON.stringify({
@@ -61,6 +66,31 @@ function appendEnriched(trade: PolyTrade & { slug: string }): void {
       tx: trade.transactionHash,
     }) + "\n",
   );
+}
+
+/**
+ * Rotate trades_enriched.jsonl when it exceeds the size cap. Mirrors the
+ * market-monitor rotation policy for trades.jsonl — old data becomes a
+ * timestamped archive next to the live file. Resolution-tracker and cluster
+ * scans only read the current file; archived data is for offline review.
+ */
+function rotateEnrichedIfNeeded(): void {
+  const now = Date.now();
+  if (now - lastRotateCheckTs < ROTATE_CHECK_EVERY_MS) return;
+  lastRotateCheckTs = now;
+  if (!existsSync(ENRICHED_PATH)) return;
+  try {
+    const sz = statSync(ENRICHED_PATH).size;
+    if (sz < ENRICHED_ROTATE_BYTES) return;
+    const archive = ENRICHED_PATH + "." + new Date().toISOString().replace(/[:.]/g, "-");
+    renameSync(ENRICHED_PATH, archive);
+    log(
+      "trade-enricher",
+      `rotated trades_enriched.jsonl -> ${archive} (was ${(sz / 1024 / 1024).toFixed(1)} MB)`,
+    );
+  } catch (e) {
+    err("trade-enricher", "rotate failed", (e as Error).message);
+  }
 }
 
 async function pollMarket(
@@ -155,6 +185,8 @@ async function pollLoop(): Promise<void> {
       }
     }
 
+    rotateEnrichedIfNeeded();
+
     const ps = poolStatus();
     heartbeat("trade-enricher", {
       watchlist_size: slugs.length,
@@ -185,10 +217,14 @@ async function globalPollLoop(): Promise<void> {
 }
 
 log("trade-enricher", "starting");
-pollLoop().catch((e) => {
-  err("trade-enricher", "fatal", e);
+// Both loops are essential — if either crashes, exit the whole process so
+// pm2 restarts and watchdog/heartbeat catches any longer outage.
+const watchlistLoop = pollLoop().catch((e) => {
+  err("trade-enricher", "watchlist loop fatal", e);
   process.exit(1);
 });
-globalPollLoop().catch((e) => {
+const globalLoop = globalPollLoop().catch((e) => {
   err("trade-enricher", "global loop fatal", e);
+  process.exit(1);
 });
+void Promise.all([watchlistLoop, globalLoop]);

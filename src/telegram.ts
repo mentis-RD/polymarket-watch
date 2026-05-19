@@ -18,6 +18,15 @@ export interface SendOpts {
   disableNotification?: boolean;
 }
 
+async function postSend(body: Record<string, unknown>): Promise<{ ok: boolean; description?: string }> {
+  const res = await request(`${API}/sendMessage`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return (await res.body.json()) as { ok: boolean; description?: string };
+}
+
 export async function sendMessage(opts: SendOpts): Promise<boolean> {
   if (!TOKEN) return false;
   const body: Record<string, unknown> = {
@@ -30,15 +39,22 @@ export async function sendMessage(opts: SendOpts): Promise<boolean> {
   if (opts.disableNotification) body.disable_notification = true;
 
   try {
-    const res = await request(`${API}/sendMessage`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const data = (await res.body.json()) as { ok: boolean; description?: string };
+    let data = await postSend(body);
     if (!data.ok) {
-      err("telegram", `sendMessage failed: ${data.description}`);
-      return false;
+      // Parse-mode failure (unbalanced `_` `*` `[` `` ` `` in user data we
+      // didn't escape) returns "can't parse entities". Retry once without
+      // parse_mode — better to send raw than silently drop the alert.
+      const desc = data.description || "";
+      if (opts.parseMode && /can't parse|entities/i.test(desc)) {
+        err("telegram", `markdown parse failed; retrying as plain: ${desc}`);
+        const { parse_mode: _pm, ...plain } = body;
+        void _pm;
+        data = await postSend(plain);
+      }
+      if (!data.ok) {
+        err("telegram", `sendMessage failed: ${data.description}`);
+        return false;
+      }
     }
     return true;
   } catch (e) {

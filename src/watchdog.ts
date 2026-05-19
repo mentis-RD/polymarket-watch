@@ -2,10 +2,11 @@ import { Agent, setGlobalDispatcher } from "undici";
 setGlobalDispatcher(new Agent({ connections: 50, pipelining: 1, keepAliveTimeout: 30_000 }));
 import "dotenv/config";
 
-import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, statSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { sendMessage } from "./telegram.js";
+import { writeAtomic } from "./atomic-write.js";
 import { log } from "./log.js";
 
 const STATE_DIR = join(process.cwd(), "state");
@@ -59,8 +60,7 @@ function canAlert(name: string): boolean {
 }
 
 function recordAlert(name: string): void {
-  mkdirSync(ALERTS_DIR, { recursive: true });
-  writeFileSync(join(ALERTS_DIR, `${name}.txt`), String(Date.now()));
+  writeAtomic(join(ALERTS_DIR, `${name}.txt`), String(Date.now()));
 }
 
 async function main(): Promise<void> {

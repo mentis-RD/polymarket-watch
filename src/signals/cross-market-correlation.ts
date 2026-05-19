@@ -1,11 +1,8 @@
-import { readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
-
 import { canAlert, markAlerted } from "../alert-cooldown.js";
 import { sendMessage } from "../telegram.js";
+import { escapeMd } from "../markdown.js";
 import { log } from "../log.js";
-
-const ENRICHED_PATH = join(process.cwd(), "state", "trades_enriched.jsonl");
+import { getRecent, type EnrichedTrade } from "../enriched-store.js";
 
 const WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const MIN_MARKET_NOTIONAL = 100; // ignore dust positions
@@ -41,18 +38,7 @@ const STOPWORDS = new Set([
   "win", "wins", "won", "lose", "loses", "lost", "beat", "beats",
 ]);
 
-interface EnrichedTrade {
-  ts: number;
-  slug: string;
-  market: string;
-  wallet: string;
-  side: "BUY" | "SELL";
-  outcome: string;
-  outcomeIndex: 0 | 1;
-  price: number;
-  size: number;
-  notional: number;
-}
+// EnrichedTrade type imported from enriched-store (shared with cluster + tracker)
 
 interface MarketBet {
   slug: string;
@@ -73,23 +59,6 @@ function tokenizeSlug(slug: string): Set<string> {
     if (STOPWORDS.has(t)) continue;
     if (/^\d+$/.test(t)) continue; // pure numeric IDs
     out.add(t);
-  }
-  return out;
-}
-
-function readRecent(): EnrichedTrade[] {
-  if (!existsSync(ENRICHED_PATH)) return [];
-  const cutoff = Date.now() - WINDOW_MS;
-  const raw = readFileSync(ENRICHED_PATH, "utf-8");
-  const out: EnrichedTrade[] = [];
-  for (const line of raw.split("\n")) {
-    if (!line) continue;
-    try {
-      const t = JSON.parse(line) as EnrichedTrade;
-      if (t.ts >= cutoff) out.push(t);
-    } catch {
-      /* skip */
-    }
   }
   return out;
 }
@@ -128,9 +97,21 @@ function aggregatePerWallet(trades: EnrichedTrade[]): Map<string, Map<string, Ma
   return out;
 }
 
+const MAX_MARKETS_PER_WALLET = 100; // hard cap for the O(M²) pair check
+
 function findKeywordClusters(bets: MarketBet[]): MarketBet[][] {
-  const filtered = bets.filter((b) => b.total_notional >= MIN_MARKET_NOTIONAL && b.keywords.size >= MIN_SHARED_KEYWORDS);
+  let filtered = bets.filter(
+    (b) => b.total_notional >= MIN_MARKET_NOTIONAL && b.keywords.size >= MIN_SHARED_KEYWORDS,
+  );
   if (filtered.length < MIN_CLUSTER_SIZE) return [];
+  // Heavy traders (hundreds of markets in 7 days) would generate
+  // hundreds-of-thousands of pair checks. Cap at top-N by notional so the
+  // scan stays bounded; we still detect the most significant correlations.
+  if (filtered.length > MAX_MARKETS_PER_WALLET) {
+    filtered = [...filtered]
+      .sort((a, b) => b.total_notional - a.total_notional)
+      .slice(0, MAX_MARKETS_PER_WALLET);
+  }
 
   // Build adjacency via shared-keyword count.
   const adj = new Map<string, Set<string>>();
@@ -214,19 +195,23 @@ async function fireAlert(wallet: string, cluster: MarketBet[]): Promise<void> {
   const dom = dominantSide(cluster);
   const shared = topSharedKeywords(cluster);
 
-  const cooldownKey = `xmarket:${wallet}:${cluster.map((b) => b.slug).sort().join(",")}`;
+  // Cooldown keyed on wallet + sorted top-3 slugs (cluster "core") so that
+  // adding a 4th correlated market doesn't immediately re-alert. Cluster
+  // membership often grows by one over time.
+  const core = cluster.map((b) => b.slug).sort().slice(0, 3).join(",");
+  const cooldownKey = `xmarket:${wallet}:${core}`;
   if (!canAlert(cooldownKey, COOLDOWN_MS)) return;
 
   const lines = [
     `🚨 *Cross-market correlation* — wallet \`${wallet.slice(0, 6)}…${wallet.slice(-4)}\``,
-    `${cluster.length} related markets, keywords: ${shared.map((k) => `\`${k}\``).join(", ") || "—"}`,
+    `${cluster.length} related markets, keywords: ${shared.map((k) => `\`${escapeMd(k)}\``).join(", ") || "—"}`,
     `dominant side: ${dom.side === 0 ? "Yes" : "No"} (${Math.round(dom.ratio * 100)}%), total ≈ $${dom.notional.toFixed(0)}`,
     "",
     ...cluster.slice(0, 8).map((b) => {
       const net = b.net_outcome0_notional - b.net_outcome1_notional;
       const dir = net >= 0 ? "Y" : "N";
       const amt = Math.abs(net).toFixed(0);
-      return `• \`${b.slug}\` ${dir} $${amt}`;
+      return `• \`${escapeMd(b.slug)}\` ${dir} $${amt}`;
     }),
     "",
     `https://polygonscan.com/address/${wallet}`,
@@ -250,7 +235,7 @@ async function fireAlert(wallet: string, cluster: MarketBet[]): Promise<void> {
  * last 7 days. Caller invokes from trade-enricher every N cycles.
  */
 export async function runScan(): Promise<{ wallets_scanned: number; alerts: number }> {
-  const trades = readRecent();
+  const trades = getRecent(WINDOW_MS);
   if (trades.length === 0) return { wallets_scanned: 0, alerts: 0 };
 
   const perWallet = aggregatePerWallet(trades);

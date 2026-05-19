@@ -1,11 +1,13 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import type { PolyTrade } from "../clob-rest.js";
 import * as smartMoney from "../smart-money-db.js";
 import * as watchlist from "../watchlist.js";
 import { canAlert, markAlerted } from "../alert-cooldown.js";
 import { sendMessage } from "../telegram.js";
+import { writeJsonAtomic } from "../atomic-write.js";
+import { escapeMd } from "../markdown.js";
 import { log } from "../log.js";
 
 const COOLDOWN_MS = 60 * 60 * 1000; // 1h per (wallet, market)
@@ -29,30 +31,32 @@ function loadSeen(): Set<string> {
 }
 
 function saveSeen(set: Set<string>): void {
-  mkdirSync(dirname(SEEN_TX_PATH), { recursive: true });
   const txs = [...set];
   if (txs.length > SEEN_TX_MAX) txs.splice(0, txs.length - SEEN_TX_MAX);
-  writeFileSync(SEEN_TX_PATH, JSON.stringify({ txs }));
+  writeJsonAtomic(SEEN_TX_PATH, { txs }, undefined);
 }
 
 let seen: Set<string> | null = null;
 
-function isWatchlist(conditionId: string): boolean {
-  const wl = watchlist.load();
-  for (const e of Object.values(wl)) {
-    if (e.condition_id === conditionId) return true;
-  }
-  return false;
-}
-
 /**
  * Process a batch of global recent trades — fire alert for any trade by a
  * smart-money wallet on a non-watchlist market.
+ *
+ * Both the watchlist and smart-money DB are loaded ONCE per batch (previously
+ * loaded inside the per-trade loop, costing up to 500 file reads on every
+ * 30s cycle). Building a Set of watchlist condition_ids gives O(1) lookups
+ * inside the hot loop.
  */
 export async function processBatch(trades: PolyTrade[]): Promise<void> {
   if (!seen) seen = loadSeen();
   const db = smartMoney.load();
   if (Object.keys(db).length === 0) return;
+
+  const wl = watchlist.load();
+  const watchedConditions = new Set<string>();
+  for (const e of Object.values(wl)) {
+    if (e.condition_id) watchedConditions.add(e.condition_id);
+  }
 
   let newSeen = 0;
   let alerts = 0;
@@ -66,7 +70,7 @@ export async function processBatch(trades: PolyTrade[]): Promise<void> {
     if (!(wallet in db)) continue;
     const notional = t.size * t.price;
     if (notional < MIN_NOTIONAL) continue;
-    if (isWatchlist(t.conditionId)) continue; // watchlist markets are covered by other signals
+    if (watchedConditions.has(t.conditionId)) continue; // covered by other signals
 
     const key = `xlink:${wallet}:${t.conditionId}`;
     if (!canAlert(key, COOLDOWN_MS)) continue;
@@ -86,19 +90,23 @@ async function fireAlert(trade: PolyTrade, entry: smartMoney.SmartMoneyEntry): P
   if (!chat) return;
 
   const wallet = trade.proxyWallet.toLowerCase();
-  const label = entry.pseudonym ? `${entry.pseudonym} (\`${wallet.slice(0, 6)}…${wallet.slice(-4)}\`)` : `\`${wallet}\``;
+  const label = entry.pseudonym
+    ? `${escapeMd(entry.pseudonym)} (\`${wallet.slice(0, 6)}…${wallet.slice(-4)}\`)`
+    : `\`${wallet}\``;
   const notional = trade.size * trade.price;
-  const seedAmt = entry.seed_amount ? ` lifetime ${entry.added_by.replace("leaderboard_", "")}: $${entry.seed_amount.toFixed(0)}` : "";
+  const seedAmt = entry.seed_amount
+    ? ` lifetime ${escapeMd(entry.added_by.replace("leaderboard_", ""))}: $${entry.seed_amount.toFixed(0)}`
+    : "";
   const wins = entry.wins.length > 0 ? `, ${entry.wins.length} prior post-mortem wins` : "";
 
   const text = [
-    `⭐ *Smart money* — \`${trade.slug}\` *(non-watchlist)*`,
-    trade.title ? `_${trade.title}_` : null,
+    `⭐ *Smart money* — \`${escapeMd(trade.slug)}\` *(non-watchlist)*`,
+    trade.title ? `_${escapeMd(trade.title)}_` : null,
     `${label}${seedAmt}${wins}`,
-    `${trade.side} ${trade.outcome}  $${notional.toFixed(0)} @${trade.price.toFixed(2)}`,
+    `${trade.side} ${escapeMd(trade.outcome)}  $${notional.toFixed(0)} @${trade.price.toFixed(2)}`,
     `https://polymarket.com/market/${trade.slug}`,
     `https://polygonscan.com/address/${wallet}`,
-    `_consider /watch ${trade.slug}_`,
+    `_consider /watch ${escapeMd(trade.slug)}_`,
   ]
     .filter((x) => x)
     .join("\n");

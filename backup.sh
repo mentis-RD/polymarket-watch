@@ -10,6 +10,12 @@ cd "$(dirname "$0")"
 MODE="${1:-hourly}"
 STATE_REPO_DIR="/root/polymarket-watch-state"
 
+# Explicit .env check — without this `. .env` under `set -u` errors out with
+# a parser-level message that hides the actual cause from the operator.
+if [ ! -f .env ]; then
+  echo "[$(date -u +%FT%TZ)] backup.sh: .env missing — credentials unavailable, aborting" >&2
+  exit 1
+fi
 # shellcheck disable=SC1091
 . .env
 

@@ -1,5 +1,7 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { readFileSync, existsSync } from "node:fs";
+import { join } from "node:path";
+
+import { writeJsonAtomic } from "./atomic-write.js";
 
 const PATH = join(process.cwd(), "state", "watchlist.json");
 
@@ -29,8 +31,7 @@ export function load(): Watchlist {
 }
 
 export function save(wl: Watchlist): void {
-  mkdirSync(dirname(PATH), { recursive: true });
-  writeFileSync(PATH, JSON.stringify(wl, null, 2));
+  writeJsonAtomic(PATH, wl);
 }
 
 export function add(slug: string, entry: WatchEntry): void {

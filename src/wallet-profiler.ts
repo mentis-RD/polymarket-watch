@@ -1,6 +1,7 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { readFileSync, existsSync, statSync } from "node:fs";
+import { join } from "node:path";
 
+import { writeJsonAtomic } from "./atomic-write.js";
 import { rpc } from "./alchemy-pool.js";
 import { classify, categoryBucket, type FundingCategory } from "./funding-source.js";
 import { fetchEarliestBridgeOrigin } from "./bridge-tracer.js";
@@ -55,18 +56,48 @@ interface AssetTransfer {
 
 type Cache = Record<string, WalletProfile>;
 
+/**
+ * In-memory cache mirror with mtime-based invalidation. Previously every
+ * getProfile call did a full readFileSync+JSON.parse — with 50-wallet
+ * cluster scans that's 50 full-file reads + up to 50 full-file writes per
+ * cycle. Now we keep an in-memory copy and only re-read disk if the file
+ * mtime changed since last load (i.e. another process wrote it).
+ */
+let memCache: Cache | null = null;
+let memMtimeMs = 0;
+
 function loadCache(): Cache {
-  if (!existsSync(PATH)) return {};
+  if (!existsSync(PATH)) {
+    if (memCache === null) memCache = {};
+    return memCache;
+  }
+  let mtime = 0;
   try {
-    return JSON.parse(readFileSync(PATH, "utf-8")) as Cache;
+    mtime = statSync(PATH).mtimeMs;
   } catch {
-    return {};
+    /* fall through */
+  }
+  if (memCache !== null && mtime === memMtimeMs) return memCache;
+  try {
+    memCache = JSON.parse(readFileSync(PATH, "utf-8")) as Cache;
+    memMtimeMs = mtime;
+    return memCache;
+  } catch {
+    if (memCache === null) memCache = {};
+    return memCache;
   }
 }
 
 function saveCache(c: Cache): void {
-  mkdirSync(dirname(PATH), { recursive: true });
-  writeFileSync(PATH, JSON.stringify(c, null, 2));
+  memCache = c;
+  writeJsonAtomic(PATH, c);
+  // Capture our own write's mtime so the next loadCache hits the in-memory
+  // path without a disk read.
+  try {
+    memMtimeMs = statSync(PATH).mtimeMs;
+  } catch {
+    /* ignore */
+  }
 }
 
 function isFresh(profile: WalletProfile): boolean {
@@ -143,6 +174,10 @@ async function buildProfile(wallet: string): Promise<WalletProfile> {
       first_meaningful_inflow_ts: ts,
       age_days: ageDays,
       score: computeScore(ageDays),
+      // inflow_count would require an extra Alchemy page to populate
+      // properly; left as 0 historically. Drop the field meaning so future
+      // readers don't expect a real value — we only fetch up to the first
+      // $1k+ hit and stop, which is enough for the freshness signal.
       inflow_count: 0,
       first_inflow_from: fromLower,
       funding_source: funding,

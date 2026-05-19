@@ -1,6 +1,8 @@
 import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
+import { err } from "./log.js";
+
 /**
  * Classify the sender of a USDC.e/USDC transfer into a Polymarket proxy wallet,
  * OR the origin wallet on the source chain after Relay tracing.
@@ -71,7 +73,11 @@ function loadDicts(): void {
     let data: Record<string, unknown>;
     try {
       data = JSON.parse(readFileSync(join(ADDRESSES_DIR, file), "utf-8"));
-    } catch {
+    } catch (e) {
+      // Surface bad JSON loudly — otherwise a typo silently disables the
+      // whole file's classifications and the only clue is /scan_unknowns
+      // showing addresses that should have been recognized.
+      err("funding-source", `failed to parse ${file}: ${(e as Error).message}`);
       continue;
     }
     for (const [addr, brand] of Object.entries(data)) {

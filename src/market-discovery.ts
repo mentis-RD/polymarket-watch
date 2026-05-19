@@ -2,12 +2,13 @@ import { Agent, setGlobalDispatcher } from "undici";
 setGlobalDispatcher(new Agent({ connections: 300, pipelining: 10, keepAliveTimeout: 30_000 }));
 import "dotenv/config";
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { fetchNewestMarkets, type PolyMarket, marketUrl, categoryFromTags } from "./polymarket-api.js";
 import { heartbeat } from "./heartbeat.js";
 import { notifyErrors } from "./telegram.js";
+import { writeJsonAtomic } from "./atomic-write.js";
 import { log, err } from "./log.js";
 
 const STATE_DIR = join(process.cwd(), "state");
@@ -36,7 +37,7 @@ function loadSeen(): SeenMap {
 }
 
 function saveSeen(seen: SeenMap): void {
-  writeFileSync(SEEN_PATH, JSON.stringify(seen, null, 2));
+  writeJsonAtomic(SEEN_PATH, seen);
 }
 
 function appendNewMarketsLog(records: NewMarketRecord[]): void {

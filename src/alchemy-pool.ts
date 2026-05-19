@@ -78,6 +78,8 @@ export async function rpc<T = unknown>(method: string, params: unknown[]): Promi
       if (data.error) {
         if (looksExhausted(0, data.error.message)) {
           k.exhausted_at = Date.now();
+          k.fail_count++; // mirror the HTTP-exhausted path
+          err("alchemy-pool", `key ${maskKey(k.key)} JSON-RPC quota error: ${data.error.message}`);
           continue;
         }
         throw new Error(`alchemy error: ${data.error.code} ${data.error.message}`);

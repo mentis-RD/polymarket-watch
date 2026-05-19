@@ -7,6 +7,7 @@ import { join } from "node:path";
 
 import { sendDocument, sendMessage } from "./telegram.js";
 import { heartbeat } from "./heartbeat.js";
+import { writeJsonAtomic } from "./atomic-write.js";
 import { log, err } from "./log.js";
 import type { NewMarketRecord } from "./market-discovery.js";
 
@@ -110,7 +111,7 @@ function loadLastDigest(): LastDigestState {
 }
 
 function saveLastDigest(state: LastDigestState): void {
-  writeFileSync(LAST_DIGEST_PATH, JSON.stringify(state, null, 2));
+  writeJsonAtomic(LAST_DIGEST_PATH, state);
 }
 
 async function maybeSendDigest(): Promise<void> {

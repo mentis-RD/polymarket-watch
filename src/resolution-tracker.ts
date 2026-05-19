@@ -2,7 +2,7 @@ import { Agent, setGlobalDispatcher } from "undici";
 setGlobalDispatcher(new Agent({ connections: 300, pipelining: 10, keepAliveTimeout: 30_000 }));
 import "dotenv/config";
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
 import * as watchlist from "./watchlist.js";
@@ -10,11 +10,13 @@ import * as smartMoney from "./smart-money-db.js";
 import { fetchMarketBySlug } from "./polymarket-api.js";
 import { sendMessage } from "./telegram.js";
 import { heartbeat } from "./heartbeat.js";
+import { writeJsonAtomic } from "./atomic-write.js";
+import { escapeMd } from "./markdown.js";
+import { getForMarket, type EnrichedTrade } from "./enriched-store.js";
 import { log, err } from "./log.js";
 
 const STATE_DIR = join(process.cwd(), "state");
 const RESOLUTIONS_PATH = join(STATE_DIR, "resolutions.json");
-const ENRICHED_PATH = join(STATE_DIR, "trades_enriched.jsonl");
 
 const CYCLE_MS = 60 * 60 * 1000; // 1h
 const WIN_PRICE_THRESHOLD = 0.2; // bought-at price for "early winner" classification
@@ -33,18 +35,7 @@ interface ResolutionRecord {
 
 type ResolutionsMap = Record<string, ResolutionRecord>; // keyed by condition_id
 
-interface EnrichedTrade {
-  ts: number;
-  slug: string;
-  market: string;
-  wallet: string;
-  side: "BUY" | "SELL";
-  outcome: string;
-  outcomeIndex: 0 | 1;
-  price: number;
-  size: number;
-  notional: number;
-}
+// EnrichedTrade imported from enriched-store (shared in-memory cache)
 
 function loadResolutions(): ResolutionsMap {
   if (!existsSync(RESOLUTIONS_PATH)) return {};
@@ -56,8 +47,7 @@ function loadResolutions(): ResolutionsMap {
 }
 
 function saveResolutions(m: ResolutionsMap): void {
-  mkdirSync(STATE_DIR, { recursive: true });
-  writeFileSync(RESOLUTIONS_PATH, JSON.stringify(m, null, 2));
+  writeJsonAtomic(RESOLUTIONS_PATH, m);
 }
 
 function parsePrices(raw?: string): number[] | null {
@@ -82,22 +72,7 @@ function parseOutcomes(raw?: string): string[] | null {
   }
 }
 
-/** Read all enriched trades for a specific condition_id. */
-function readTradesForMarket(conditionId: string): EnrichedTrade[] {
-  if (!existsSync(ENRICHED_PATH)) return [];
-  const out: EnrichedTrade[] = [];
-  const raw = readFileSync(ENRICHED_PATH, "utf-8");
-  for (const line of raw.split("\n")) {
-    if (!line) continue;
-    try {
-      const t = JSON.parse(line) as EnrichedTrade;
-      if (t.market === conditionId) out.push(t);
-    } catch {
-      /* skip */
-    }
-  }
-  return out;
-}
+// readTradesForMarket replaced by shared getForMarket from enriched-store.
 
 interface WalletAggregate {
   wallet: string;
@@ -184,21 +159,39 @@ async function checkMarket(
     err("resolution-tracker", `${slug}: malformed outcomePrices/outcomes`);
     return false;
   }
-  // Winning outcome has price ~= 1.0; treat anything >= 0.9 as winner.
+  // Winning outcome has price ~= 1.0; treat anything >= 0.9 as a clean
+  // winner. For "tight" resolutions (0.7..0.9) we still record the market
+  // as processed so we don't keep retrying Gamma forever — but we skip
+  // winner identification because "bought < $0.20 on winning side" doesn't
+  // imply a 5x return when the winning side closed at 0.85.
   let winningIdx: 0 | 1 = 0;
   if (prices[1] > prices[0]) winningIdx = 1;
-  if (prices[winningIdx] < 0.9) {
-    // 50/50 split or unusual; skip processing.
-    log("resolution-tracker", `${slug}: no clear winner (prices=${prices.join(",")}); skip`);
-    return false;
-  }
   const winningOutcome = outcomes[winningIdx];
+  const cleanWin = prices[winningIdx] >= 0.9;
+  const resolvedTs = Date.parse(market.endDate || new Date().toISOString());
 
-  const trades = readTradesForMarket(conditionId);
+  if (!cleanWin) {
+    log(
+      "resolution-tracker",
+      `${slug}: tight resolution (prices=${prices.join(",")}), skipping winner detection but marking processed`,
+    );
+    resolutions[conditionId] = {
+      condition_id: conditionId,
+      slug,
+      resolved_at_iso: market.endDate || new Date().toISOString(),
+      resolved_at_ts: Number.isFinite(resolvedTs) ? resolvedTs : Date.now(),
+      winning_outcome: winningOutcome,
+      winning_outcome_index: winningIdx,
+      processed_at_ts: Date.now(),
+      winner_count: 0,
+    };
+    return true;
+  }
+
+  const trades = getForMarket(conditionId);
   const winners = identifyWinners(trades, winningIdx);
 
   // Persist resolution.
-  const resolvedTs = Date.parse(market.endDate || new Date().toISOString());
   resolutions[conditionId] = {
     condition_id: conditionId,
     slug,
@@ -210,19 +203,26 @@ async function checkMarket(
     winner_count: winners.length,
   };
 
-  // Add winners to smart-money DB.
-  for (const w of winners) {
-    smartMoney.recordWin(w.wallet, {
-      ts: w.earliest_buy_ts,
-      slug,
-      market: conditionId,
-      outcome: winningOutcome,
-      outcomeIndex: winningIdx,
-      avg_bought_price: w.avg_bought_price,
-      size: w.net_size_held,
-      notional: w.notional_invested,
-      multiple: w.multiple,
-    });
+  // Bulk-add winners to smart-money DB: single file rewrite for the whole
+  // batch instead of N (previously a 50-winner resolution rewrote
+  // smart_money.json 50 times in succession).
+  if (winners.length > 0) {
+    smartMoney.recordWins(
+      winners.map((w) => ({
+        wallet: w.wallet,
+        win: {
+          ts: w.earliest_buy_ts,
+          slug,
+          market: conditionId,
+          outcome: winningOutcome,
+          outcomeIndex: winningIdx,
+          avg_bought_price: w.avg_bought_price,
+          size: w.net_size_held,
+          notional: w.notional_invested,
+          multiple: w.multiple,
+        },
+      })),
+    );
   }
 
   await sendRecap(slug, market.question || slug, winningOutcome, winners);
@@ -246,8 +246,8 @@ async function sendRecap(
   });
 
   const text = [
-    `📊 *Resolution* — \`${slug}\` → *${outcome}*`,
-    `_${question}_`,
+    `📊 *Resolution* — \`${escapeMd(slug)}\` → *${escapeMd(outcome)}*`,
+    `_${escapeMd(question)}_`,
     "",
     winners.length > 0
       ? `*Early winners (bought < ${WIN_PRICE_THRESHOLD}, held through, >$${MIN_NOTIONAL}):* ${winners.length}`

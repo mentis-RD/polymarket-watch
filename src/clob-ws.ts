@@ -43,6 +43,7 @@ export class ClobWS extends EventEmitter {
   private backoffMs = 1000;
   private readonly maxBackoffMs = 60_000;
   private pingTimer: NodeJS.Timeout | null = null;
+  private droppedMessages = 0;
 
   emit<K extends keyof ClobWSEvents>(event: K, ...args: Parameters<ClobWSEvents[K]>): boolean {
     return super.emit(event, ...args);
@@ -55,10 +56,43 @@ export class ClobWS extends EventEmitter {
     const next = new Set(ids);
     const sameSize = next.size === this.assetIds.size;
     const sameAll = sameSize && [...next].every((id) => this.assetIds.has(id));
+    if (sameAll) {
+      // Identical set — keep the existing socket alive so we don't drop
+      // in-flight trades. Previously every reload triggered a reconnect.
+      this.assetIds = next;
+      return;
+    }
+    // If we're already connected, prefer an incremental update: the CLOB
+    // server accepts a fresh subscribe payload on the open socket and
+    // adopts the new asset set without a full reconnect. Only fall back to
+    // reconnect when no socket exists yet.
     this.assetIds = next;
-    if (sameAll) return;
+    if (this.ws && this.ws.readyState === 1) {
+      log("clob-ws", `asset_ids updated (${next.size}); resubscribing on open socket`);
+      try {
+        this.ws.send(
+          JSON.stringify({
+            assets_ids: [...this.assetIds],
+            type: "market",
+            custom_feature_enabled: false,
+          }),
+        );
+        return;
+      } catch (e) {
+        err("clob-ws", "live resubscribe failed; falling back to reconnect", e);
+      }
+    }
     log("clob-ws", `asset_ids updated (${next.size}); reconnecting`);
     this.reconnect();
+  }
+
+  /** Diagnostics for heartbeat payload. */
+  stats(): { connected: boolean; assets: number; dropped: number } {
+    return {
+      connected: !!this.ws && this.ws.readyState === 1,
+      assets: this.assetIds.size,
+      dropped: this.droppedMessages,
+    };
   }
 
   start(): void {
@@ -83,6 +117,14 @@ export class ClobWS extends EventEmitter {
   }
 
   private reconnect(): void {
+    // Clear pingTimer eagerly. Previously cleared only in the `close` event
+    // handler — between reconnect() and the eventual close fire, a second
+    // open could install a new interval while the old one was still ticking
+    // on the now-closing socket. Orphan timers accumulated over uptime.
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
+    }
     if (this.ws) {
       try {
         this.ws.close();
@@ -138,7 +180,16 @@ export class ClobWS extends EventEmitter {
           this.handleMessage(item as Record<string, unknown>);
         }
       } catch (e) {
-        err("clob-ws", "parse message failed", e);
+        this.droppedMessages++;
+        // Log only the first occurrence per minute to avoid spam if the
+        // server starts sending malformed payloads.
+        if (this.droppedMessages % 100 === 1) {
+          err(
+            "clob-ws",
+            `parse message failed (cumulative dropped=${this.droppedMessages})`,
+            (e as Error).message,
+          );
+        }
       }
     });
 

@@ -1,13 +1,10 @@
-import { readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
-
 import { getProfile, type WalletProfile } from "../wallet-profiler.js";
 import { canAlert, markAlerted } from "../alert-cooldown.js";
 import { sendMessage } from "../telegram.js";
+import { escapeMd } from "../markdown.js";
 import { log } from "../log.js";
 import { categoryBucket, type FundingCategory } from "../funding-source.js";
-
-const ENRICHED_PATH = join(process.cwd(), "state", "trades_enriched.jsonl");
+import { getForMarket } from "../enriched-store.js";
 
 const WINDOW_MS = 48 * 60 * 60 * 1000; // analyze last 48h on the market
 const MIN_NOTIONAL = 500; // ignore tiny traders ($500 lifetime on market)
@@ -21,18 +18,7 @@ const TIME_TOLERANCE_MS = 60 * 60 * 1000; // ±60 min for "similar timing"
 const AMOUNT_TOLERANCE = 0.2; // ±20%
 const FRESH_AGE_DAYS = 21;
 
-interface EnrichedTrade {
-  ts: number;
-  slug: string;
-  market: string;
-  wallet: string;
-  side: "BUY" | "SELL";
-  outcome: string;
-  outcomeIndex: 0 | 1;
-  price: number;
-  size: number;
-  notional: number;
-}
+import type { EnrichedTrade } from "../enriched-store.js";
 
 interface WalletAgg {
   wallet: string;
@@ -51,24 +37,8 @@ interface WalletAgg {
   bridge_origin_funding_source: FundingCategory;
 }
 
-/** Read enriched trades for a single market within the window. */
-function readMarketTrades(conditionId: string, sinceTs: number): EnrichedTrade[] {
-  if (!existsSync(ENRICHED_PATH)) return [];
-  const out: EnrichedTrade[] = [];
-  const raw = readFileSync(ENRICHED_PATH, "utf-8");
-  for (const line of raw.split("\n")) {
-    if (!line) continue;
-    try {
-      const t = JSON.parse(line) as EnrichedTrade;
-      if (t.market !== conditionId) continue;
-      if (t.ts < sinceTs) continue;
-      out.push(t);
-    } catch {
-      /* skip */
-    }
-  }
-  return out;
-}
+// readMarketTrades replaced by shared `getForMarket` from enriched-store
+// (single mtime-checked parse per cycle across all markets + signals).
 
 function aggregateWallets(trades: EnrichedTrade[]): Map<string, WalletAgg> {
   const map = new Map<string, WalletAgg>();
@@ -198,12 +168,18 @@ function pairwiseScore(a: WalletAgg, b: WalletAgg): PairScore {
     }
   }
 
-  // Same dominant side?
-  const aSide = a.net_outcome0_notional >= a.net_outcome1_notional ? 0 : 1;
-  const bSide = b.net_outcome0_notional >= b.net_outcome1_notional ? 0 : 1;
-  if (aSide === bSide) {
-    s += 0.3;
-    factors.push(`same-side(${aSide === 0 ? "Yes" : "No"})`);
+  // Same dominant side? Skip the factor entirely when either wallet has
+  // no net position on either side (e.g. only-SELLs cancelling earlier buys).
+  // Previously these defaulted to side 0 and inflated false-positive clustering.
+  const aHas = a.net_outcome0_notional > 0 || a.net_outcome1_notional > 0;
+  const bHas = b.net_outcome0_notional > 0 || b.net_outcome1_notional > 0;
+  if (aHas && bHas) {
+    const aSide = a.net_outcome0_notional >= a.net_outcome1_notional ? 0 : 1;
+    const bSide = b.net_outcome0_notional >= b.net_outcome1_notional ? 0 : 1;
+    if (aSide === bSide) {
+      s += 0.3;
+      factors.push(`same-side(${aSide === 0 ? "Yes" : "No"})`);
+    }
   }
 
   // Similar timing of first significant trade?
@@ -324,12 +300,12 @@ async function fireAlert(meta: MarketMeta, info: AlertInfo): Promise<void> {
 
   const wallets = info.cluster.map((w) => `\`${w.slice(0, 6)}…${w.slice(-4)}\``).join(", ");
   const text = [
-    `🚨 *Coordinated cluster* — \`${meta.slug}\``,
-    `_${meta.question}_`,
+    `🚨 *Coordinated cluster* — \`${escapeMd(meta.slug)}\``,
+    `_${escapeMd(meta.question)}_`,
     `cluster: ${info.cluster.length} wallets on ${info.dominantSide === 0 ? "Yes" : "No"}`,
     `${wallets}`,
     `total notional: $${info.totalNotional.toFixed(0)}`,
-    `strongest pair score=${info.maxPair.score.toFixed(2)} (${info.maxPair.factors.join(", ")})`,
+    `strongest pair score=${info.maxPair.score.toFixed(2)} (${escapeMd(info.maxPair.factors.join(", "))})`,
     meta.end_date ? `⏳ ends ${meta.end_date.slice(0, 10)}` : null,
     `https://polymarket.com/market/${meta.slug}`,
   ]
@@ -351,14 +327,18 @@ async function fireAlert(meta: MarketMeta, info: AlertInfo): Promise<void> {
  * alert-cooldown keyed by sorted wallet set.
  */
 export async function checkMarket(conditionId: string, meta: MarketMeta): Promise<void> {
-  const trades = readMarketTrades(conditionId, Date.now() - WINDOW_MS);
+  const trades = getForMarket(conditionId, WINDOW_MS);
   if (trades.length < MIN_CLUSTER_SIZE) return;
 
   const wallets = aggregateWallets(trades);
-  // Drop tiny wallets.
+  // Drop tiny wallets. Two-pass (collect then delete) — Map mutation during
+  // iteration is technically safe per spec, but explicit two-pass is clearer
+  // and avoids engine quirks if the iteration semantics ever drift.
+  const tinyWallets: string[] = [];
   for (const [w, agg] of wallets) {
-    if (agg.total_notional < MIN_NOTIONAL) wallets.delete(w);
+    if (agg.total_notional < MIN_NOTIONAL) tinyWallets.push(w);
   }
+  for (const w of tinyWallets) wallets.delete(w);
   if (wallets.size < MIN_CLUSTER_SIZE) return;
   if (wallets.size > MAX_WALLETS_PER_MARKET) {
     // Keep top N by notional.
@@ -421,8 +401,12 @@ export async function checkMarket(conditionId: string, meta: MarketMeta): Promis
     }
     if (maxPair.score < SCORE_PAIR_STRONG) continue;
 
-    const sortedKey = [...cluster].sort().join(",");
-    const cooldownKey = `cluster:${conditionId}:${sortedKey}`;
+    // Cooldown keyed by conditionId + the 3-wallet "core" of the cluster
+    // (lowest-address triple). Adding a 4th/5th wallet later does NOT change
+    // the core triple, so the cooldown still suppresses drip re-alerts as
+    // the cluster grows by one wallet at a time.
+    const core = [...cluster].sort().slice(0, 3).join(",");
+    const cooldownKey = `cluster:${conditionId}:${core}`;
     if (!canAlert(cooldownKey, COOLDOWN_MS)) continue;
 
     const totalNotional = cluster.reduce((s, w) => s + (wallets.get(w)?.total_notional ?? 0), 0);

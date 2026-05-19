@@ -3,11 +3,13 @@ setGlobalDispatcher(new Agent({ connections: 50, pipelining: 1, keepAliveTimeout
 import "dotenv/config";
 
 import { request } from "undici";
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
 import { sendMessage } from "./telegram.js";
 import { heartbeat } from "./heartbeat.js";
+import { writeAtomic } from "./atomic-write.js";
+import { escapeMd } from "./markdown.js";
 import { log, err } from "./log.js";
 import * as watchlist from "./watchlist.js";
 import { fetchMarketBySlug, parseClobTokenIds } from "./polymarket-api.js";
@@ -57,8 +59,7 @@ function loadOffset(): number {
 }
 
 function saveOffset(n: number): void {
-  mkdirSync(STATE_DIR, { recursive: true });
-  writeFileSync(OFFSET_PATH, String(n));
+  writeAtomic(OFFSET_PATH, String(n));
 }
 
 function loadSeen(): Record<string, SeenMarket> {
@@ -115,8 +116,21 @@ async function handleWatch(msg: TGMessage, args: string[]): Promise<void> {
   const seen = loadSeen();
   const marketMeta = seen[slug];
   if (!marketMeta) {
-    await reply(msg, `❌ slug \`${slug}\` not found in seen_markets. typo?`);
+    await reply(msg, `❌ slug \`${escapeMd(slug)}\` not found in seen_markets. typo?`);
     return;
+  }
+
+  // Reject stale slugs (market already ended). Otherwise the cleanup pass
+  // would drop it 14 days later — wasted subscription in the meantime.
+  if (marketMeta.end_date) {
+    const endTs = Date.parse(marketMeta.end_date);
+    if (Number.isFinite(endTs) && endTs < Date.now()) {
+      await reply(
+        msg,
+        `❌ \`${escapeMd(slug)}\` ended ${marketMeta.end_date.slice(0, 10)} — nothing to monitor live. (resolution-tracker will handle post-mortem if it was on watchlist before.)`,
+      );
+      return;
+    }
   }
 
   // Fetch fresh market data to get clob_token_ids and condition_id for monitor subscription.
@@ -133,11 +147,14 @@ async function handleWatch(msg: TGMessage, args: string[]): Promise<void> {
   }
 
   if (clob_token_ids.length === 0) {
-    await reply(msg, `⚠️ \`${slug}\` has no clob_token_ids (market may not be tradable yet); monitor cannot subscribe`);
+    await reply(
+      msg,
+      `⚠️ \`${escapeMd(slug)}\` has no clob_token_ids (market may not be tradable yet); monitor cannot subscribe`,
+    );
   }
 
   if (watchlist.has(slug)) {
-    await reply(msg, `ℹ️ \`${slug}\` already on watchlist; updating tag/reason`);
+    await reply(msg, `ℹ️ \`${escapeMd(slug)}\` already on watchlist; updating tag/reason`);
   }
 
   watchlist.add(slug, {
@@ -153,7 +170,7 @@ async function handleWatch(msg: TGMessage, args: string[]): Promise<void> {
 
   await reply(
     msg,
-    `✅ watching \`${slug}\` (${tag})\n_${marketMeta.question}_${reason ? `\nreason: ${reason}` : ""}`,
+    `✅ watching \`${escapeMd(slug)}\` (${tag})\n_${escapeMd(marketMeta.question)}_${reason ? `\nreason: ${escapeMd(reason)}` : ""}`,
   );
 }
 
@@ -164,9 +181,9 @@ async function handleUnwatch(msg: TGMessage, args: string[]): Promise<void> {
   }
   const slug = args[0];
   if (watchlist.remove(slug)) {
-    await reply(msg, `✅ unwatched \`${slug}\``);
+    await reply(msg, `✅ unwatched \`${escapeMd(slug)}\``);
   } else {
-    await reply(msg, `❌ \`${slug}\` not on watchlist`);
+    await reply(msg, `❌ \`${escapeMd(slug)}\` not on watchlist`);
   }
 }
 
@@ -181,9 +198,9 @@ async function handleWl(msg: TGMessage): Promise<void> {
     .sort((a, b) => wl[a].added_at - wl[b].added_at)
     .map((s) => {
       const e = wl[s];
-      const reason = e.reason ? ` — ${e.reason}` : "";
+      const reason = e.reason ? ` — ${escapeMd(e.reason)}` : "";
       const end = e.end_date ? ` (ends ${e.end_date.slice(0, 10)})` : "";
-      return `• \`${s}\` ${e.risk_tag}${end}${reason}`;
+      return `• \`${escapeMd(s)}\` ${e.risk_tag}${end}${reason}`;
     });
   await reply(msg, `📋 watchlist (${slugs.length}):\n${lines.join("\n")}`);
 }
@@ -229,6 +246,10 @@ function loadAllProfiles(): CachedWalletProfile[] {
 
 async function handleScanUnknowns(msg: TGMessage, args: string[]): Promise<void> {
   const minFanout = Math.max(2, Math.min(50, Number(args[0]) || 3));
+  // Yield once before the blocking file parse so the long-poll loop can
+  // process other updates first. For small caches this is invisible; for
+  // large caches it prevents starving other commands.
+  await new Promise<void>((r) => setImmediate(r));
   const profiles = loadAllProfiles();
   const sizes = dictSizes();
 
@@ -396,7 +417,7 @@ async function handleProfile(msg: TGMessage, args: string[]): Promise<void> {
     .slice(0, 10)
     .map((m) => {
       const buy24 = m.buy_24h > 0 ? ` (24h: $${m.buy_24h.toFixed(0)})` : "";
-      return `• \`${m.slug}\` buy=$${m.buy_30d.toFixed(0)}${buy24} sell=$${m.sell_30d.toFixed(0)}`;
+      return `• \`${escapeMd(m.slug)}\` buy=$${m.buy_30d.toFixed(0)}${buy24} sell=$${m.sell_30d.toFixed(0)}`;
     });
 
   const lines = [

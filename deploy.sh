@@ -74,6 +74,15 @@ while IFS= read -r f; do
       RESTART_ENRICHER=1
       RESTART_CONTROL=1
       ;;
+    src/atomic-write.ts|src/markdown.ts|src/enriched-store.ts)
+      # cross-cutting helpers consumed by most signals + control
+      RESTART_DISCOVERY=1
+      RESTART_DIGEST=1
+      RESTART_CONTROL=1
+      RESTART_MONITOR=1
+      RESTART_ENRICHER=1
+      RESTART_RESOLUTION=1
+      ;;
     addresses/*.json)
       # funding-source.ts reads these at module init — restart consumers
       # so newly-added CEX/swap/etc entries take effect without a code commit.

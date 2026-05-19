@@ -1,5 +1,7 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { readFileSync, existsSync } from "node:fs";
+import { join } from "node:path";
+
+import { writeJsonAtomic } from "./atomic-write.js";
 
 const PATH = join(process.cwd(), "state", "smart_money.json");
 
@@ -37,24 +39,33 @@ export function load(): SmartMoneyDB {
 }
 
 export function save(db: SmartMoneyDB): void {
-  mkdirSync(dirname(PATH), { recursive: true });
-  writeFileSync(PATH, JSON.stringify(db, null, 2));
+  writeJsonAtomic(PATH, db);
 }
 
 export function recordWin(wallet: string, win: WinRecord): void {
-  const lc = wallet.toLowerCase();
+  // Single-winner add path. Prefer recordWins() for batch inserts so we
+  // pay one full-file rewrite instead of N when a market resolves with
+  // 50 early winners.
+  recordWins([{ wallet, win }]);
+}
+
+/** Batched winner recording — single load + single save for the whole list. */
+export function recordWins(rows: { wallet: string; win: WinRecord }[]): void {
+  if (rows.length === 0) return;
   const db = load();
-  const entry = db[lc] ?? {
-    first_added_ts: Date.now(),
-    added_by: "post_mortem",
-    wins: [],
-  };
-  // Dedup by (slug, outcome) — one entry per market resolution per wallet.
-  const exists = entry.wins.some((w) => w.slug === win.slug && w.outcomeIndex === win.outcomeIndex);
-  if (!exists) {
-    entry.wins.push(win);
+  for (const { wallet, win } of rows) {
+    const lc = wallet.toLowerCase();
+    const entry = db[lc] ?? {
+      first_added_ts: Date.now(),
+      added_by: "post_mortem",
+      wins: [],
+    };
+    const exists = entry.wins.some(
+      (w) => w.slug === win.slug && w.outcomeIndex === win.outcomeIndex,
+    );
+    if (!exists) entry.wins.push(win);
+    db[lc] = entry;
   }
-  db[lc] = entry;
   save(db);
 }
 

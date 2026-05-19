@@ -1,6 +1,7 @@
 import type { TradeEvent } from "../clob-ws.js";
 import { canAlert, markAlerted } from "../alert-cooldown.js";
 import { sendMessage } from "../telegram.js";
+import { escapeMd } from "../markdown.js";
 import { log } from "../log.js";
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -133,10 +134,10 @@ export class VolumeSpikeDetector {
       ? ` (${Math.round(info.sideRatio * 100)}% ${info.dominantSide})`
       : "";
     const text = [
-      `🚨 *Volume spike* — \`${slug}\``,
-      meta ? `_${meta.question}_` : null,
+      `🚨 *Volume spike* — \`${escapeMd(slug)}\``,
+      meta ? `_${escapeMd(meta.question)}_` : null,
       `${info.multiple.toFixed(1)}× baseline${sideTxt}`,
-      `current_hr=${info.curVol.toFixed(0)}  baseline=${info.baseline.toFixed(0)}/hr`,
+      `current\\_hr=${info.curVol.toFixed(0)}  baseline=${info.baseline.toFixed(0)}/hr`,
       meta?.end_date ? `⏳ ends ${meta.end_date.slice(0, 10)}` : null,
       `https://polymarket.com/market/${slug}`,
     ]
