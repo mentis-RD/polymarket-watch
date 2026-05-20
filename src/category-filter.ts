@@ -178,6 +178,13 @@ const SKIP_SLUG_RES: RegExp[] = [
   /(?:^|[-])\d+pt\d+-or-above-earthquake/i,
   /(?:^|[-])magnitude-\d+pt\d+-earthquake/i,
   /(?:^|[-])will-any-(?:category|cat)-?\d+-hurricane/i,
+  // 5) Volcano VEI markets: "Vesuvius eruption with VEI 1 in 2026",
+  //    "Etna eruption with VEI 2 in 2026", "major-volcano-eruption-vei-6-in-2026",
+  //    "how-many-large-volcano-eruption-vei-4-in-2026". Dormant + low VEI =
+  //    statistical noise; active + low VEI (Etna) = volcanologist-only
+  //    edge that doesn't bet on Polymarket. Year-window aggregates,
+  //    no insider edge.
+  /(?:^|[-])eruption-(?:with-)?vei-\d+/i,
 ];
 
 export function isSkippedSlug(slug: string): boolean {
