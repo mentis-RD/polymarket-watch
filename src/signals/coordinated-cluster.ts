@@ -4,7 +4,7 @@ import { sendMessage } from "../telegram.js";
 import { escapeMd } from "../markdown.js";
 import { log } from "../log.js";
 import { categoryBucket, type FundingCategory } from "../funding-source.js";
-import { getForMarket } from "../enriched-store.js";
+import { getForEvent } from "../enriched-store.js";
 
 const WINDOW_MS = 48 * 60 * 60 * 1000; // analyze last 48h on the market
 const MIN_NOTIONAL = 500; // ignore tiny traders ($500 lifetime on market)
@@ -307,7 +307,7 @@ async function fireAlert(meta: MarketMeta, info: AlertInfo): Promise<void> {
     `total notional: $${info.totalNotional.toFixed(0)}`,
     `strongest pair score=${info.maxPair.score.toFixed(2)} (${escapeMd(info.maxPair.factors.join(", "))})`,
     meta.end_date ? `⏳ ends ${meta.end_date.slice(0, 10)}` : null,
-    `https://polymarket.com/market/${meta.slug}`,
+    `https://polymarket.com/event/${meta.slug}`,
   ]
     .filter((x) => x)
     .join("\n");
@@ -326,8 +326,15 @@ async function fireAlert(meta: MarketMeta, info: AlertInfo): Promise<void> {
  * alerts if any qualifying connected component is found. Idempotent thanks to
  * alert-cooldown keyed by sorted wallet set.
  */
-export async function checkMarket(conditionId: string, meta: MarketMeta): Promise<void> {
-  const trades = getForMarket(conditionId, WINDOW_MS);
+/**
+ * Cluster-detect at the EVENT level: aggregates trades from every sub-market
+ * of the event into one wallet-level view before pairwise scoring. Catches
+ * "split the bet across strikes" pattern that per-market analysis missed.
+ *
+ * `meta.slug` here is the event_slug (cooldown + alert URL use it).
+ */
+export async function checkMarket(eventSlug: string, meta: MarketMeta): Promise<void> {
+  const trades = getForEvent(eventSlug, WINDOW_MS);
   if (trades.length < MIN_CLUSTER_SIZE) return;
 
   const wallets = aggregateWallets(trades);
@@ -406,7 +413,7 @@ export async function checkMarket(conditionId: string, meta: MarketMeta): Promis
     // the core triple, so the cooldown still suppresses drip re-alerts as
     // the cluster grows by one wallet at a time.
     const core = [...cluster].sort().slice(0, 3).join(",");
-    const cooldownKey = `cluster:${conditionId}:${core}`;
+    const cooldownKey = `cluster:${eventSlug}:${core}`;
     if (!canAlert(cooldownKey, COOLDOWN_MS)) continue;
 
     const totalNotional = cluster.reduce((s, w) => s + (wallets.get(w)?.total_notional ?? 0), 0);

@@ -3,16 +3,16 @@
 module.exports = {
   apps: [
     {
-      name: "pmw-market-discovery",
+      name: "pmw-event-discovery",
       script: "npx",
-      args: "tsx src/market-discovery.ts",
+      args: "tsx src/event-discovery.ts",
       cwd: __dirname,
       autorestart: true,
       max_restarts: 50,
       restart_delay: 5000,
       kill_timeout: 10000,
-      out_file: "state/market-discovery.out.log",
-      error_file: "state/market-discovery.err.log",
+      out_file: "state/event-discovery.out.log",
+      error_file: "state/event-discovery.err.log",
       time: true,
       env: {
         NODE_ENV: "production",

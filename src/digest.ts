@@ -9,11 +9,11 @@ import { sendDocument, sendMessage } from "./telegram.js";
 import { heartbeat } from "./heartbeat.js";
 import { writeJsonAtomic } from "./atomic-write.js";
 import { log, err } from "./log.js";
-import type { NewMarketRecord } from "./market-discovery.js";
+import type { NewEventRecord } from "./event-discovery.js";
 
 const STATE_DIR = join(process.cwd(), "state");
 const OUTPUT_DIR = join(process.cwd(), "output");
-const NEW_LOG_PATH = join(STATE_DIR, "new_markets.jsonl");
+const NEW_LOG_PATH = join(STATE_DIR, "new_events.jsonl");
 const LAST_DIGEST_PATH = join(STATE_DIR, "last_digest.json");
 
 const TZ = process.env.DIGEST_TZ || "Europe/Berlin";
@@ -49,13 +49,13 @@ function hourInTz(now: Date): number {
   return Number(parts.find((p) => p.type === "hour")?.value || "0");
 }
 
-function loadNewMarketsSince(sinceTs: number): NewMarketRecord[] {
+function loadNewEventsSince(sinceTs: number): NewEventRecord[] {
   if (!existsSync(NEW_LOG_PATH)) return [];
   const lines = readFileSync(NEW_LOG_PATH, "utf-8").split("\n").filter((l) => l.trim());
-  const out: NewMarketRecord[] = [];
+  const out: NewEventRecord[] = [];
   for (const line of lines) {
     try {
-      const r = JSON.parse(line) as NewMarketRecord;
+      const r = JSON.parse(line) as NewEventRecord;
       if (r.ts >= sinceTs) out.push(r);
     } catch {
       // skip malformed line
@@ -64,26 +64,30 @@ function loadNewMarketsSince(sinceTs: number): NewMarketRecord[] {
   return out;
 }
 
-function buildCsv(records: NewMarketRecord[]): string {
+function buildCsv(records: NewEventRecord[]): string {
   const headers = [
-    "slug",
+    "event_slug",
     "title",
     "category",
+    "tags",
     "end_date",
     "start_date",
+    "num_markets",
     "volume_24h",
     "liquidity",
-    "question_summary",
+    "description",
     "polymarket_url",
   ];
   const rows = records.map((r) => {
     const summary = (r.description || "").slice(0, 280);
     return [
-      r.slug,
+      r.event_slug,
       r.title,
       r.category,
+      r.tags,
       r.end_date,
       r.start_date,
+      r.num_markets,
       r.volume_24h.toFixed(2),
       r.liquidity.toFixed(2),
       summary,
@@ -125,10 +129,10 @@ async function maybeSendDigest(): Promise<void> {
 
   // Send for "yesterday→today" window: last 24 hours from now.
   const since = now.getTime() - 24 * 60 * 60 * 1000;
-  const records = loadNewMarketsSince(since);
+  const records = loadNewEventsSince(since);
 
   mkdirSync(OUTPUT_DIR, { recursive: true });
-  const csvPath = join(OUTPUT_DIR, `new_markets_${dateKey}.csv`);
+  const csvPath = join(OUTPUT_DIR, `new_events_${dateKey}.csv`);
   const csv = buildCsv(records);
   writeFileSync(csvPath, csv);
 
@@ -140,14 +144,14 @@ async function maybeSendDigest(): Promise<void> {
     return;
   }
 
-  const caption = `📋 New Polymarket markets ${dateKey}\nCount: ${records.length} (last 24h)\nReply with risk tags (HIGH / MED / SKIP) per slug.`;
+  const totalSubs = records.reduce((s, r) => s + (r.num_markets || 0), 0);
+  const caption = `📋 New Polymarket events ${dateKey}\nCount: ${records.length} events (${totalSubs} sub-markets) in last 24h\nReply with risk tags (HIGH / MED / SKIP) per event_slug; then /watch <event_slug>.`;
 
   if (records.length === 0) {
-    // Still notify so we know the digest ran.
     await sendMessage({
       chatId: chat,
       threadId: thread || undefined,
-      text: `📋 New Polymarket markets ${dateKey}\nNo new markets in last 24h.`,
+      text: `📋 New Polymarket events ${dateKey}\nNo new events in last 24h.`,
     });
   } else {
     const ok = await sendDocument({
@@ -163,7 +167,7 @@ async function maybeSendDigest(): Promise<void> {
   }
 
   saveLastDigest({ last_date_key: dateKey, last_sent_ts: Date.now(), last_sent_iso: now.toISOString() });
-  log("digest", `sent digest for ${dateKey} (${records.length} markets)`);
+  log("digest", `sent digest for ${dateKey} (${records.length} events)`);
 }
 
 async function main(): Promise<void> {

@@ -84,8 +84,12 @@ function sweepStaleWallets(): void {
 }
 
 interface AlertMeta {
-  slug: string;
-  question: string;
+  /** Parent event slug — signal aggregates 24h notional ACROSS all sub-markets of this event. */
+  event_slug: string;
+  /** Event title for the alert message. */
+  event_title: string;
+  /** Sub-market slug the actual trade hit (for context in the alert). */
+  sub_slug: string;
   end_date: string;
   risk_tag: string;
 }
@@ -98,16 +102,20 @@ export async function handleEnrichedTrade(
 
   sweepStaleWallets();
 
+  // Aggregate 24h notional at the EVENT level — wallet hedging across N
+  // sub-markets of one event was previously invisible (per-market threshold
+  // never tripped). Now we sum across all sub-markets of the parent event.
   const wallet = trade.proxyWallet.toLowerCase();
   let perWallet = positions.get(wallet);
   if (!perWallet) {
     perWallet = new Map();
     positions.set(wallet, perWallet);
   }
-  let arr = perWallet.get(trade.conditionId);
+  // Key the per-wallet bucket by event_slug, not conditionId.
+  let arr = perWallet.get(meta.event_slug);
   if (!arr) {
     arr = [];
-    perWallet.set(trade.conditionId, arr);
+    perWallet.set(meta.event_slug, arr);
   }
   const tradeTs = trade.timestamp * 1000;
   const notional = trade.size * trade.price;
@@ -121,16 +129,12 @@ export async function handleEnrichedTrade(
   const profile = await getProfile(wallet);
   if (!profile) return;
 
-  // Two alert paths, both gated by a (wallet, market) cooldown:
-  //   A) fresh wallet (score ≥ 6) AND 24h dominant-side ≥ $5k
-  //   B) no $1k+ USDC inflow on record AND 24h dominant-side ≥ $10k
-  //      (caught by the redesigned score-1 path — see wallet-profiler)
   const pathA = profile.score >= SCORE_THRESHOLD && dominantNotional >= NOTIONAL_THRESHOLD;
   const pathB =
     profile.age_days === null && dominantNotional >= NOTIONAL_THRESHOLD_NO_INFLOW;
   if (!pathA && !pathB) return;
 
-  const key = `freshwallet:${wallet}:${trade.conditionId}`;
+  const key = `freshwallet:${wallet}:${meta.event_slug}`;
   if (!canAlert(key, COOLDOWN_MS)) return;
 
   await fireAlert(trade, meta, profile, dominantNotional, dominantIdx, pathB);
@@ -156,17 +160,17 @@ async function fireAlert(
   const endShort = meta.end_date ? meta.end_date.slice(0, 10) : "";
   const dominantOutcome = dominantIdx === 0 ? "Yes" : "No";
   const header = noInflowPath
-    ? `🚨 *Fresh wallet (hidden funding)* — \`${escapeMd(meta.slug)}\``
-    : `🚨 *Fresh wallet* — \`${escapeMd(meta.slug)}\``;
+    ? `🚨 *Fresh wallet (hidden funding)* — event \`${escapeMd(meta.event_slug)}\``
+    : `🚨 *Fresh wallet* — event \`${escapeMd(meta.event_slug)}\``;
 
   const text = [
     header,
-    `_${escapeMd(meta.question)}_`,
+    `_${escapeMd(meta.event_title)}_`,
     `wallet \`${profile.wallet}\` score=${profile.score}/10`,
     ageTxt,
-    `24h net ${dominantOutcome}: $${net.toFixed(0)}  @${trade.price.toFixed(2)}`,
+    `24h event-wide net ${dominantOutcome}: $${net.toFixed(0)} (latest sub \`${escapeMd(meta.sub_slug)}\` @${trade.price.toFixed(2)})`,
     endShort ? `⏳ ends ${endShort}` : null,
-    `https://polymarket.com/market/${meta.slug}`,
+    `https://polymarket.com/event/${meta.event_slug}`,
     `https://polygonscan.com/address/${profile.wallet}`,
   ]
     .filter((x) => x)
@@ -180,6 +184,6 @@ async function fireAlert(
   });
   log(
     "fresh-wallet",
-    `alert: ${profile.wallet} on ${meta.slug} net=$${net.toFixed(0)} score=${profile.score} path=${noInflowPath ? "B" : "A"}`,
+    `alert: ${profile.wallet} on event ${meta.event_slug} net=$${net.toFixed(0)} score=${profile.score} path=${noInflowPath ? "B" : "A"}`,
   );
 }

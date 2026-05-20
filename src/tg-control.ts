@@ -12,7 +12,11 @@ import { writeAtomic } from "./atomic-write.js";
 import { escapeMd } from "./markdown.js";
 import { log, err } from "./log.js";
 import * as watchlist from "./watchlist.js";
-import { fetchMarketBySlug, parseClobTokenIds } from "./polymarket-api.js";
+import {
+  parseClobTokenIds,
+  resolveEventFromAnySlug,
+  type PolyEventFull,
+} from "./polymarket-api.js";
 import { getProfile } from "./wallet-profiler.js";
 import { dictSizes } from "./funding-source.js";
 
@@ -20,7 +24,6 @@ const TOKEN = process.env.TG_TOKEN || "";
 const ALLOWED_CHAT = process.env.TG_CHAT_MAIN || "";
 const STATE_DIR = join(process.cwd(), "state");
 const OFFSET_PATH = join(STATE_DIR, "tg_offset.txt");
-const SEEN_PATH = join(STATE_DIR, "seen_markets.json");
 const TRADES_ENRICHED_PATH = join(STATE_DIR, "trades_enriched.jsonl");
 
 const POLL_TIMEOUT_SEC = 25;
@@ -41,13 +44,6 @@ interface TGMessage {
   entities?: { type: string; offset: number; length: number }[];
 }
 
-interface SeenMarket {
-  first_seen_ts: number;
-  created_at: string;
-  start_date: string;
-  end_date: string;
-  question: string;
-}
 
 function loadOffset(): number {
   if (!existsSync(OFFSET_PATH)) return 0;
@@ -62,14 +58,9 @@ function saveOffset(n: number): void {
   writeAtomic(OFFSET_PATH, String(n));
 }
 
-function loadSeen(): Record<string, SeenMarket> {
-  if (!existsSync(SEEN_PATH)) return {};
-  try {
-    return JSON.parse(readFileSync(SEEN_PATH, "utf-8")) as Record<string, SeenMarket>;
-  } catch {
-    return {};
-  }
-}
+// loadSeen() removed: /watch resolves event slugs directly via Gamma API
+// (resolveEventFromAnySlug) instead of consulting seen_markets.json.
+// seen_events.json is owned by event-discovery and not read here.
 
 async function fetchUpdates(offset: number): Promise<TGUpdate[]> {
   const url = `https://api.telegram.org/bot${TOKEN}/getUpdates?offset=${offset}&timeout=${POLL_TIMEOUT_SEC}&allowed_updates=%5B%22message%22%5D`;
@@ -99,9 +90,28 @@ function parseCommand(text: string): { cmd: string; args: string[] } | null {
   return { cmd: head.toLowerCase(), args: parts.slice(1) };
 }
 
+function buildSubMarkets(event: PolyEventFull): watchlist.SubMarket[] {
+  const out: watchlist.SubMarket[] = [];
+  for (const m of event.markets ?? []) {
+    if (!m.slug) continue;
+    if (m.closed || m.archived) continue;
+    out.push({
+      slug: m.slug,
+      question: m.question || "",
+      condition_id: m.conditionId || "",
+      clob_token_ids: parseClobTokenIds(m),
+      end_date: m.endDate,
+    });
+  }
+  return out;
+}
+
 async function handleWatch(msg: TGMessage, args: string[]): Promise<void> {
   if (args.length === 0) {
-    await reply(msg, "usage: `/watch <slug> [HIGH|MED] [reason...]`");
+    await reply(
+      msg,
+      "usage: `/watch <event-or-market-slug> [HIGH|MED] [reason...]`\n_resolves market slugs back to their parent event_",
+    );
     return;
   }
   const slug = args[0];
@@ -113,75 +123,80 @@ async function handleWatch(msg: TGMessage, args: string[]): Promise<void> {
   }
   const reason = args.slice(reasonStart).join(" ");
 
-  const seen = loadSeen();
-  const marketMeta = seen[slug];
-  if (!marketMeta) {
-    await reply(msg, `❌ slug \`${escapeMd(slug)}\` not found in seen_markets. typo?`);
+  // Try event first, fall back to market → parent event.
+  let event: PolyEventFull | null = null;
+  try {
+    event = await resolveEventFromAnySlug(slug);
+  } catch (e) {
+    err("tg-control", `resolveEventFromAnySlug(${slug}) failed`, e);
+  }
+  if (!event) {
+    await reply(msg, `❌ \`${escapeMd(slug)}\` not found as event or market on Gamma. typo?`);
     return;
   }
 
-  // Reject stale slugs (market already ended). Otherwise the cleanup pass
-  // would drop it 14 days later — wasted subscription in the meantime.
-  if (marketMeta.end_date) {
-    const endTs = Date.parse(marketMeta.end_date);
+  // Reject events whose end_date is already past (UMA pending, nothing to monitor live).
+  if (event.endDate) {
+    const endTs = Date.parse(event.endDate);
     if (Number.isFinite(endTs) && endTs < Date.now()) {
       await reply(
         msg,
-        `❌ \`${escapeMd(slug)}\` ended ${marketMeta.end_date.slice(0, 10)} — nothing to monitor live. (resolution-tracker will handle post-mortem if it was on watchlist before.)`,
+        `❌ event \`${escapeMd(event.slug)}\` ended ${event.endDate.slice(0, 10)} — nothing to monitor live.`,
       );
       return;
     }
   }
 
-  // Fetch fresh market data to get clob_token_ids and condition_id for monitor subscription.
-  let condition_id = "";
-  let clob_token_ids: string[] = [];
-  try {
-    const fresh = await fetchMarketBySlug(slug);
-    if (fresh) {
-      condition_id = fresh.conditionId || "";
-      clob_token_ids = parseClobTokenIds(fresh);
-    }
-  } catch (e) {
-    err("tg-control", `fetchMarketBySlug(${slug}) failed`, e);
-  }
-
-  if (clob_token_ids.length === 0) {
+  const subMarkets = buildSubMarkets(event);
+  if (subMarkets.length === 0) {
     await reply(
       msg,
-      `⚠️ \`${escapeMd(slug)}\` has no clob_token_ids (market may not be tradable yet); monitor cannot subscribe`,
+      `⚠️ event \`${escapeMd(event.slug)}\` has no open sub-markets with clob_token_ids; monitor cannot subscribe`,
+    );
+    return;
+  }
+
+  const subsWithTokens = subMarkets.filter((sm) => sm.clob_token_ids.length > 0).length;
+  if (subsWithTokens < subMarkets.length) {
+    log(
+      "tg-control",
+      `${event.slug}: ${subMarkets.length - subsWithTokens} sub-markets without tokens (skipped from subscription)`,
     );
   }
 
-  if (watchlist.has(slug)) {
-    await reply(msg, `ℹ️ \`${escapeMd(slug)}\` already on watchlist; updating tag/reason`);
-  }
-
-  watchlist.add(slug, {
+  const wasOnList = watchlist.has(event.slug);
+  watchlist.add(event.slug, {
     added_at: Date.now(),
     added_by: "manual",
     risk_tag: tag,
     reason,
-    end_date: marketMeta.end_date,
-    question: marketMeta.question,
-    condition_id,
-    clob_token_ids,
+    event_slug: event.slug,
+    event_title: event.title || "",
+    end_date: event.endDate || "",
+    sub_markets: subMarkets,
   });
 
+  const verb = wasOnList ? "↻ updated" : "✅ watching";
   await reply(
     msg,
-    `✅ watching \`${escapeMd(slug)}\` (${tag})\n_${escapeMd(marketMeta.question)}_${reason ? `\nreason: ${escapeMd(reason)}` : ""}`,
+    `${verb} event \`${escapeMd(event.slug)}\` (${tag}) — ${subMarkets.length} sub-markets\n_${escapeMd(event.title || "")}_${reason ? `\nreason: ${escapeMd(reason)}` : ""}\nhttps://polymarket.com/event/${event.slug}`,
   );
 }
 
 async function handleUnwatch(msg: TGMessage, args: string[]): Promise<void> {
   if (args.length === 0) {
-    await reply(msg, "usage: `/unwatch <slug>`");
+    await reply(msg, "usage: `/unwatch <event-slug>`");
     return;
   }
   const slug = args[0];
-  if (watchlist.remove(slug)) {
-    await reply(msg, `✅ unwatched \`${escapeMd(slug)}\``);
+  // Allow unwatch by sub-market slug too — find the parent event in watchlist.
+  let target = slug;
+  if (!watchlist.has(slug)) {
+    const parent = watchlist.findEventForSubMarketSlug(slug);
+    if (parent) target = parent.event_slug;
+  }
+  if (watchlist.remove(target)) {
+    await reply(msg, `✅ unwatched event \`${escapeMd(target)}\``);
   } else {
     await reply(msg, `❌ \`${escapeMd(slug)}\` not on watchlist`);
   }
@@ -200,9 +215,10 @@ async function handleWl(msg: TGMessage): Promise<void> {
       const e = wl[s];
       const reason = e.reason ? ` — ${escapeMd(e.reason)}` : "";
       const end = e.end_date ? ` (ends ${e.end_date.slice(0, 10)})` : "";
-      return `• \`${escapeMd(s)}\` ${e.risk_tag}${end}${reason}`;
+      const subs = ` [${e.sub_markets.length} sub]`;
+      return `• \`${escapeMd(s)}\` ${e.risk_tag}${subs}${end}${reason}`;
     });
-  await reply(msg, `📋 watchlist (${slugs.length}):\n${lines.join("\n")}`);
+  await reply(msg, `📋 watchlist (${slugs.length} events):\n${lines.join("\n")}`);
 }
 
 async function handleHelp(msg: TGMessage): Promise<void> {
@@ -335,6 +351,7 @@ interface EnrichedTradeLine {
   ts: number;
   slug: string;
   market: string;
+  event_slug?: string;
   wallet: string;
   side: "BUY" | "SELL";
   outcome: string;
@@ -394,15 +411,35 @@ async function handleProfile(msg: TGMessage, args: string[]): Promise<void> {
       ? "no $1k+ USDC inflow on record"
       : `${profile.age_days}d since first $1k+ USDC inflow`;
 
-  // Per-market net BUY notional 24h vs 30d.
-  const byMarket = new Map<string, { slug: string; buy_24h: number; buy_30d: number; sell_30d: number; last_ts: number }>();
+  // Group by EVENT (not sub-market). Trades on multiple strikes of one
+  // event collapse into one event line, with sub-market count noted.
+  const byEvent = new Map<
+    string,
+    {
+      key: string;
+      buy_24h: number;
+      buy_30d: number;
+      sell_30d: number;
+      last_ts: number;
+      sub_count: Set<string>;
+    }
+  >();
   const dayCutoff = Date.now() - 24 * 60 * 60 * 1000;
   for (const t of trades) {
-    let m = byMarket.get(t.slug);
+    const key = t.event_slug ?? t.slug;
+    let m = byEvent.get(key);
     if (!m) {
-      m = { slug: t.slug, buy_24h: 0, buy_30d: 0, sell_30d: 0, last_ts: t.ts };
-      byMarket.set(t.slug, m);
+      m = {
+        key,
+        buy_24h: 0,
+        buy_30d: 0,
+        sell_30d: 0,
+        last_ts: t.ts,
+        sub_count: new Set<string>(),
+      };
+      byEvent.set(key, m);
     }
+    m.sub_count.add(t.slug);
     if (t.side === "BUY") {
       m.buy_30d += t.notional;
       if (t.ts >= dayCutoff) m.buy_24h += t.notional;
@@ -412,12 +449,13 @@ async function handleProfile(msg: TGMessage, args: string[]): Promise<void> {
     if (t.ts > m.last_ts) m.last_ts = t.ts;
   }
 
-  const marketLines = [...byMarket.values()]
+  const marketLines = [...byEvent.values()]
     .sort((a, b) => b.buy_30d - a.buy_30d)
     .slice(0, 10)
     .map((m) => {
       const buy24 = m.buy_24h > 0 ? ` (24h: $${m.buy_24h.toFixed(0)})` : "";
-      return `• \`${escapeMd(m.slug)}\` buy=$${m.buy_30d.toFixed(0)}${buy24} sell=$${m.sell_30d.toFixed(0)}`;
+      const subs = m.sub_count.size > 1 ? ` [${m.sub_count.size} subs]` : "";
+      return `• \`${escapeMd(m.key)}\`${subs} buy=$${m.buy_30d.toFixed(0)}${buy24} sell=$${m.sell_30d.toFixed(0)}`;
     });
 
   const lines = [

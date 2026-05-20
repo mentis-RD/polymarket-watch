@@ -81,41 +81,47 @@ function replayTrades(maxAgeMs: number): number {
 
 function reloadWatchlist(): void {
   const wl = watchlist.load();
-  const newAssetToSlug = new Map<string, string>();
-  const known = new Set<string>();
-  for (const [slug, entry] of Object.entries(wl)) {
-    known.add(slug);
-    detector.setMarketMeta(slug, {
-      question: entry.question,
+  const newAssetToEvent = new Map<string, string>(); // tokenId → event_slug
+  const knownEvents = new Set<string>();
+
+  for (const [eventSlug, entry] of Object.entries(wl)) {
+    knownEvents.add(eventSlug);
+    // Volume-spike detector now tracks at EVENT level — one combined
+    // baseline across all sub-markets of the event.
+    detector.setMarketMeta(eventSlug, {
+      question: entry.event_title,
       end_date: entry.end_date,
       risk_tag: entry.risk_tag,
     });
-    for (const tokenId of entry.clob_token_ids || []) {
-      if (tokenId) newAssetToSlug.set(tokenId, slug);
+    for (const sm of entry.sub_markets) {
+      for (const tokenId of sm.clob_token_ids || []) {
+        if (tokenId) newAssetToEvent.set(tokenId, eventSlug);
+      }
     }
   }
-  // Drop detector state for removed slugs.
+  // Drop detector state for removed events.
   for (const slug of detector.trackedSlugs()) {
-    if (!known.has(slug)) detector.removeMarket(slug);
+    if (!knownEvents.has(slug)) detector.removeMarket(slug);
   }
 
-  // Swap the map.
   assetToSlug.clear();
-  for (const [k, v] of newAssetToSlug) assetToSlug.set(k, v);
+  for (const [k, v] of newAssetToEvent) assetToSlug.set(k, v);
 
   ws.setAssetIds([...assetToSlug.keys()]);
   log(
     "market-monitor",
-    `watchlist=${Object.keys(wl).length} subscriptions=${assetToSlug.size}`,
+    `watchlist=${knownEvents.size} events, ${assetToSlug.size} token subscriptions`,
   );
 }
 
 function onTrade(t: TradeEvent): void {
-  const slug = assetToSlug.get(t.asset_id);
-  if (!slug) return; // ignore trades for assets we no longer track
+  // Now the value is the EVENT slug, not a sub-market slug — volume-spike
+  // and other monitor-side signals aggregate at event level.
+  const eventSlug = assetToSlug.get(t.asset_id);
+  if (!eventSlug) return;
   const stored: StoredTrade = {
     ts: t.ts,
-    slug,
+    slug: eventSlug,
     asset_id: t.asset_id,
     market: t.market,
     side: t.side,
@@ -127,7 +133,7 @@ function onTrade(t: TradeEvent): void {
   } catch (e) {
     err("market-monitor", "appendTrade failed", e);
   }
-  detector.ingest(slug, t);
+  detector.ingest(eventSlug, t);
 }
 
 async function main(): Promise<void> {

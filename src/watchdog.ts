@@ -19,7 +19,7 @@ interface ProcessSpec {
 }
 
 const PROCESSES: ProcessSpec[] = [
-  { name: "market-discovery", maxAgeMs: 90 * 60 * 1000 }, // 90 min (cycle is 60 min)
+  { name: "event-discovery", maxAgeMs: 90 * 60 * 1000 }, // 90 min (cycle is 60 min)
   { name: "digest", maxAgeMs: 10 * 60 * 1000 }, // 10 min (ticks every 1 min)
   { name: "tg-control", maxAgeMs: 5 * 60 * 1000 }, // 5 min (long-poll heartbeats per cycle)
   { name: "market-monitor", maxAgeMs: 5 * 60 * 1000 }, // 5 min (ticks every 1 min)

@@ -16,8 +16,12 @@ const PATH = join(process.cwd(), "state", "trades_enriched.jsonl");
 
 export interface EnrichedTrade {
   ts: number;
+  /** Sub-market slug (the binary question). */
   slug: string;
+  /** Sub-market conditionId. */
   market: string;
+  /** Event slug — multiple sub-markets share this; signals aggregate over it. */
+  event_slug?: string;
   wallet: string;
   side: "BUY" | "SELL";
   outcome: string;
@@ -82,6 +86,22 @@ export function getForMarket(conditionId: string, maxAgeMs?: number): EnrichedTr
   const out: EnrichedTrade[] = [];
   for (const t of cached) {
     if (t.market !== conditionId) continue;
+    if (cutoff > 0 && t.ts < cutoff) continue;
+    out.push(t);
+  }
+  return out;
+}
+
+/**
+ * Trades for one event (across ALL its sub-markets) within the last
+ * `maxAgeMs`. Used by event-level cluster + resolution-tracker signals.
+ */
+export function getForEvent(eventSlug: string, maxAgeMs?: number): EnrichedTrade[] {
+  refresh();
+  const cutoff = maxAgeMs ? Date.now() - maxAgeMs : 0;
+  const out: EnrichedTrade[] = [];
+  for (const t of cached) {
+    if (t.event_slug !== eventSlug) continue;
     if (cutoff > 0 && t.ts < cutoff) continue;
     out.push(t);
   }

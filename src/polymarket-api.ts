@@ -251,6 +251,31 @@ async function fetchEventsPage(opts: FetchEventsOpts = {}): Promise<PolyEventFul
  * (Gamma returns 422 once you exceed ~10k offset). Returns events sorted
  * by ascending endDate so the soonest-to-resolve come first.
  */
+export async function fetchEventBySlug(slug: string): Promise<PolyEventFull | null> {
+  const params = new URLSearchParams({ slug, include_tag: "true" });
+  const url = `${BASE}/events?${params.toString()}`;
+  const res = await request(url);
+  if (res.statusCode !== 200) return null;
+  const data = (await res.body.json()) as PolyEventFull[];
+  if (!Array.isArray(data) || data.length === 0) return null;
+  return data[0];
+}
+
+/**
+ * Resolve a slug to an event. Accepts EITHER an event slug or a market slug
+ * — if the slug matches a market, returns that market's parent event.
+ * Returns null if neither lookup succeeds.
+ */
+export async function resolveEventFromAnySlug(slug: string): Promise<PolyEventFull | null> {
+  const event = await fetchEventBySlug(slug);
+  if (event) return event;
+  const market = await fetchMarketBySlug(slug);
+  if (!market) return null;
+  const parentSlug = market.events?.[0]?.slug;
+  if (!parentSlug) return null;
+  return await fetchEventBySlug(parentSlug);
+}
+
 export async function fetchOpenEvents(opts: {
   maxPages?: number;
   pageSize?: number;

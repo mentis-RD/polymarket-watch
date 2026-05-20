@@ -40,7 +40,7 @@ git reset --hard origin/main
 if echo "$CHANGED" | grep -q -E "^(package\.json|package-lock\.json)$"; then
   echo "deps changed, running npm install"
   npm install --no-audit --no-fund
-  pm2 restart pmw-market-discovery pmw-digest pmw-tg-control pmw-market-monitor pmw-trade-enricher pmw-resolution-tracker || pm2 start ecosystem.config.cjs
+  pm2 restart pmw-event-discovery pmw-digest pmw-tg-control pmw-market-monitor pmw-trade-enricher pmw-resolution-tracker || pm2 start ecosystem.config.cjs
   echo "[$(date -u +%FT%TZ)] full restart done"
   exit 0
 fi
@@ -55,7 +55,7 @@ RESTART_RESOLUTION=0
 
 while IFS= read -r f; do
   case "$f" in
-    src/market-discovery.ts) RESTART_DISCOVERY=1 ;;
+    src/event-discovery.ts) RESTART_DISCOVERY=1 ;;
     src/digest.ts)           RESTART_DIGEST=1 ;;
     src/tg-control.ts)       RESTART_CONTROL=1 ;;
     src/watchlist.ts)
@@ -142,7 +142,7 @@ done <<< "$CHANGED"
 # because bash already loaded the old deploy.sh into memory before `git reset`.
 pm2 start ecosystem.config.cjs >/dev/null 2>&1 || true
 
-[ "$RESTART_DISCOVERY"  = "1" ] && pm2 restart pmw-market-discovery   && echo "restarted pmw-market-discovery"
+[ "$RESTART_DISCOVERY"  = "1" ] && pm2 restart pmw-event-discovery    && echo "restarted pmw-event-discovery"
 [ "$RESTART_DIGEST"     = "1" ] && pm2 restart pmw-digest             && echo "restarted pmw-digest"
 [ "$RESTART_CONTROL"    = "1" ] && pm2 restart pmw-tg-control         && echo "restarted pmw-tg-control"
 [ "$RESTART_MONITOR"    = "1" ] && pm2 restart pmw-market-monitor     && echo "restarted pmw-market-monitor"

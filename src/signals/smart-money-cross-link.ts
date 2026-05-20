@@ -52,10 +52,9 @@ export async function processBatch(trades: PolyTrade[]): Promise<void> {
   const db = smartMoney.load();
   if (Object.keys(db).length === 0) return;
 
-  const wl = watchlist.load();
   const watchedConditions = new Set<string>();
-  for (const e of Object.values(wl)) {
-    if (e.condition_id) watchedConditions.add(e.condition_id);
+  for (const s of watchlist.allConditionIds()) {
+    watchedConditions.add(s.conditionId);
   }
 
   let newSeen = 0;

@@ -271,25 +271,31 @@ async function cycle(): Promise<void> {
   const now = Date.now();
   let processed = 0;
 
-  for (const [slug, entry] of Object.entries(wl)) {
-    if (!entry.condition_id) continue;
-    if (!entry.end_date) continue;
-    const endTs = Date.parse(entry.end_date);
-    if (!Number.isFinite(endTs)) continue;
-    if (endTs > now) continue; // not yet ended
-    if (resolutions[entry.condition_id]) continue;
-    try {
-      const ok = await checkMarket(slug, entry.condition_id, resolutions);
-      if (ok) processed++;
-    } catch (e) {
-      err("resolution-tracker", `checkMarket ${slug} failed`, e);
+  // Iterate every sub-market of every watchlist event. Each sub-market
+  // resolves independently (different deadlines / different outcomes), so
+  // we keep resolutions[] keyed by conditionId.
+  for (const entry of Object.values(wl)) {
+    for (const sm of entry.sub_markets) {
+      if (!sm.condition_id) continue;
+      const subEnd = sm.end_date || entry.end_date;
+      if (!subEnd) continue;
+      const endTs = Date.parse(subEnd);
+      if (!Number.isFinite(endTs)) continue;
+      if (endTs > now) continue;
+      if (resolutions[sm.condition_id]) continue;
+      try {
+        const ok = await checkMarket(sm.slug, sm.condition_id, resolutions);
+        if (ok) processed++;
+      } catch (e) {
+        err("resolution-tracker", `checkMarket ${sm.slug} failed`, e);
+      }
     }
   }
 
   if (processed > 0) saveResolutions(resolutions);
 
   heartbeat("resolution-tracker", {
-    watchlist_size: Object.keys(wl).length,
+    events: Object.keys(wl).length,
     processed_total: Object.keys(resolutions).length,
     processed_this_cycle: processed,
   });

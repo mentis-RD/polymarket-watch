@@ -64,7 +64,10 @@ function tokenizeSlug(slug: string): Set<string> {
 }
 
 function aggregatePerWallet(trades: EnrichedTrade[]): Map<string, Map<string, MarketBet>> {
-  // wallet → market_slug → MarketBet
+  // wallet → event_slug → MarketBet (aggregated across all sub-markets
+  // of the event). Falls back to sub-market slug for old data without
+  // event_slug. Cross-market correlation between EVENTS is much more
+  // signal-rich than between strikes of the same event.
   const out = new Map<string, Map<string, MarketBet>>();
   for (const t of trades) {
     const w = t.wallet.toLowerCase();
@@ -73,19 +76,20 @@ function aggregatePerWallet(trades: EnrichedTrade[]): Map<string, Map<string, Ma
       perWallet = new Map();
       out.set(w, perWallet);
     }
-    let bet = perWallet.get(t.slug);
+    const groupSlug = t.event_slug ?? t.slug;
+    let bet = perWallet.get(groupSlug);
     if (!bet) {
       bet = {
-        slug: t.slug,
+        slug: groupSlug,
         market: t.market,
         total_notional: 0,
         net_outcome0_notional: 0,
         net_outcome1_notional: 0,
-        keywords: tokenizeSlug(t.slug),
+        keywords: tokenizeSlug(groupSlug),
         first_ts: t.ts,
         last_ts: t.ts,
       };
-      perWallet.set(t.slug, bet);
+      perWallet.set(groupSlug, bet);
     }
     bet.total_notional += t.notional;
     bet.first_ts = Math.min(bet.first_ts, t.ts);

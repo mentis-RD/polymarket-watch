@@ -47,14 +47,15 @@ function saveLastTs(m: LastTsMap): void {
   writeJsonAtomic(LAST_TS_PATH, m);
 }
 
-function appendEnriched(trade: PolyTrade & { slug: string }): void {
+function appendEnriched(trade: PolyTrade & { slug: string; event_slug: string }): void {
   mkdirSync(STATE_DIR, { recursive: true });
   appendFileSync(
     ENRICHED_PATH,
     JSON.stringify({
       ts: trade.timestamp * 1000,
-      slug: trade.slug,
-      market: trade.conditionId,
+      slug: trade.slug, // sub-market slug
+      market: trade.conditionId, // sub-market conditionId
+      event_slug: trade.event_slug, // event the sub-market belongs to
       wallet: trade.proxyWallet.toLowerCase(),
       side: trade.side,
       outcome: trade.outcome,
@@ -95,8 +96,8 @@ function rotateEnrichedIfNeeded(): void {
 
 async function pollMarket(
   conditionId: string,
-  slug: string,
-  meta: { question: string; end_date: string; risk_tag: string },
+  subSlug: string,
+  meta: { event_slug: string; event_title: string; end_date: string; risk_tag: string },
   lastTs: LastTsMap,
 ): Promise<number> {
   let trades: PolyTrade[];
@@ -111,15 +112,15 @@ async function pollMarket(
   let maxTs = prevTs;
   let newCount = 0;
 
-  // CLOB returns newest first; iterate oldest-first so signals get chronological order.
   for (let i = trades.length - 1; i >= 0; i--) {
     const t = trades[i];
     if (t.timestamp <= prevTs) continue;
-    appendEnriched({ ...t, slug });
+    appendEnriched({ ...t, slug: subSlug, event_slug: meta.event_slug });
     try {
       await handleEnrichedTrade(t, {
-        slug,
-        question: meta.question,
+        event_slug: meta.event_slug,
+        event_title: meta.event_title,
+        sub_slug: subSlug,
         end_date: meta.end_date,
         risk_tag: meta.risk_tag,
       });
@@ -139,16 +140,20 @@ async function pollLoop(): Promise<void> {
   while (true) {
     cycleNum++;
     const wl = watchlist.load();
-    const slugs = Object.entries(wl).filter(([, e]) => e.condition_id);
+    // Flat list of every sub-market we need to poll, with its parent event.
+    const subs = watchlist.allConditionIds();
     let totalNew = 0;
 
     const lastTs = loadLastTs();
-    for (const [slug, entry] of slugs) {
+    for (const s of subs) {
+      const entry = wl[s.eventSlug];
+      if (!entry) continue;
       const n = await pollMarket(
-        entry.condition_id,
-        slug,
+        s.conditionId,
+        s.subSlug,
         {
-          question: entry.question,
+          event_slug: entry.event_slug,
+          event_title: entry.event_title,
           end_date: entry.end_date,
           risk_tag: entry.risk_tag,
         },
@@ -158,18 +163,18 @@ async function pollLoop(): Promise<void> {
     }
     if (totalNew > 0) saveLastTs(lastTs);
 
-    // Cluster checks are O(n²) per market with Alchemy lookups per wallet;
-    // run less often than per-cycle.
+    // Cluster checks run at EVENT level (aggregated across sub-markets),
+    // every 10 cycles (~10 min).
     if (cycleNum % CLUSTER_CHECK_EVERY_CYCLES === 0) {
-      for (const [slug, entry] of slugs) {
+      for (const [eventSlug, entry] of Object.entries(wl)) {
         try {
-          await checkClusterMarket(entry.condition_id, {
-            slug,
-            question: entry.question,
+          await checkClusterMarket(eventSlug, {
+            slug: eventSlug,
+            question: entry.event_title,
             end_date: entry.end_date,
           });
         } catch (e) {
-          err("trade-enricher", `cluster check ${slug} failed`, (e as Error).message);
+          err("trade-enricher", `cluster check ${eventSlug} failed`, (e as Error).message);
         }
       }
     }
@@ -188,14 +193,19 @@ async function pollLoop(): Promise<void> {
     rotateEnrichedIfNeeded();
 
     const ps = poolStatus();
+    const eventCount = Object.keys(wl).length;
     heartbeat("trade-enricher", {
-      watchlist_size: slugs.length,
+      events: eventCount,
+      sub_markets: subs.length,
       new_trades: totalNew,
       alchemy_keys: ps.keys,
       alchemy_exhausted: ps.exhausted,
       cycle: cycleNum,
     });
-    log("trade-enricher", `cycle ${cycleNum}: watchlist=${slugs.length} new_trades=${totalNew}`);
+    log(
+      "trade-enricher",
+      `cycle ${cycleNum}: events=${eventCount} subs=${subs.length} new_trades=${totalNew}`,
+    );
     await sleep(POLL_MS);
   }
 }
