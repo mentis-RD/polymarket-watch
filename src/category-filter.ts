@@ -199,6 +199,17 @@ const SKIP_SLUG_RES: RegExp[] = [
   //    edge that doesn't bet on Polymarket. Year-window aggregates,
   //    no insider edge.
   /(?:^|[-])eruption-(?:with-)?vei-\d+/i,
+  // 6) Equity weekly price ticks: "Will AAPL hit week of May 18, 2026?"
+  //    "Will RKLB hit week of May 18?". Polymarket polls weekly stock
+  //    closes against bracket levels — same shape as the Pyth/finance-updown
+  //    ticks we already tag-filter, but some tickers (AMZN/META/TSLA/NFLX/
+  //    COIN/HOOD/RKLB/ABNB) carry only the bare 'finance' tag and slip past.
+  /^will-[a-z]{2,6}-hit-week-of-/i,
+  // 7) Equity monthly price-bracket: "What price will RKLB hit in May 2026?"
+  //    "What price will TSLA hit in May 2026?". Polymarket monthly bracket
+  //    polling. Note the 'hit-in-<month>' shape is distinct from legit
+  //    'reach-by-<date>' valuation milestone markets which we keep.
+  /^what-price-will-[a-z0-9-]+-hit-in-(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)-\d+/i,
 ];
 
 export function isSkippedSlug(slug: string): boolean {

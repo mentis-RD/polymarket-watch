@@ -2,7 +2,7 @@ category,file,events
 politics,politics.csv,1363
 crypto,crypto.csv,175
 culture,culture.csv,169
-finance,finance.csv,167
+finance,finance.csv,152
 geopolitics,geopolitics.csv,92
 tech,tech.csv,84
 economy,economy.csv,79
@@ -19,7 +19,6 @@ ipos,ipos.csv,1
 lalit-modi,lalit-modi.csv,1
 merge,merge.csv,1
 monsanto-company-v-durnell,monsanto-company-v-durnell.csv,1
-monthly,monthly.csv,1
 trump,trump.csv,1
 uk,uk.csv,1
 world,world.csv,1
