@@ -44,7 +44,10 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 interface CatalogRow {
   slug: string;
   title: string;
-  category: string; // primary tag
+  category: string; // primary tag (used for file routing)
+  tags: string; // ALL tags, pipe-separated — for downstream filtering
+  event_slug: string; // Polymarket event grouping (multiple markets per event)
+  condition_id: string;
   end_date: string;
   start_date: string;
   days_to_end: number;
@@ -153,6 +156,17 @@ function primaryTag(tags?: PolyTag[]): string {
   return slugged[0];
 }
 
+function allTagsPipe(tags?: PolyTag[]): string {
+  if (!tags || tags.length === 0) return "";
+  // Keep ALL tags including internal ones (rewards-*, hide-from-new, ...)
+  // — user can grep/filter them out, and having them visible is useful info.
+  // Slugged form so it grep's cleanly without case-sensitivity surprises.
+  return tags
+    .map((t) => slugify(t.label || ""))
+    .filter((s) => s.length > 0)
+    .join("|");
+}
+
 function toRow(m: PolyMarket): CatalogRow {
   const now = Date.now();
   const endTs = m.endDate ? Date.parse(m.endDate) : NaN;
@@ -161,6 +175,9 @@ function toRow(m: PolyMarket): CatalogRow {
     slug: m.slug,
     title: m.question || "",
     category: primaryTag(m.tags),
+    tags: allTagsPipe(m.tags),
+    event_slug: m.events?.[0]?.slug || "",
+    condition_id: m.conditionId || "",
     end_date: m.endDate || "",
     start_date: m.startDate || "",
     days_to_end: daysToEnd,
@@ -182,30 +199,48 @@ function csvEscape(v: unknown): string {
 }
 
 function rowsToCsv(rows: CatalogRow[]): string {
+  // Column order chosen for at-a-glance scanning in a spreadsheet:
+  //   slug / title / category / tags / event_slug    — identity & grouping
+  //   end_date / days_to_end / start_date            — timing
+  //   volume_24h / volume_total / liquidity          — informational, NOT filtered upstream
+  //   description / polymarket_url / condition_id    — context & API refs
+  //
+  // The `tags` column is pipe-separated (`politics|elections|trump|2026`) so
+  // you can grep/filter without comma collisions: in Excel filter by "contains
+  // trump", in CLI: `grep -E '[,"]tags[^,]*\\|trump\\|' file.csv` or simpler
+  // `awk -F, 'NR==1 || $4 ~ /lebron/' politics.csv`.
   const headers = [
     "slug",
     "title",
     "category",
+    "tags",
+    "event_slug",
     "end_date",
     "days_to_end",
+    "start_date",
     "volume_24h",
     "volume_total",
     "liquidity",
     "description",
     "polymarket_url",
+    "condition_id",
   ];
   const lines = rows.map((r) =>
     [
       r.slug,
       r.title,
       r.category,
+      r.tags,
+      r.event_slug,
       r.end_date,
       r.days_to_end,
+      r.start_date,
       r.volume_24h.toFixed(2),
       r.volume_total.toFixed(2),
       r.liquidity.toFixed(2),
       r.description,
       r.url,
+      r.condition_id,
     ]
       .map(csvEscape)
       .join(","),
