@@ -107,8 +107,8 @@ async function discoveryCycle(): Promise<void> {
   let skippedSports = 0;
   for (const e of all) {
     if (!e.slug) continue;
-    // Skip sports / esports / combat — they're not insider-detection targets.
-    if (isSkippedCategoryEvent(e.tags)) {
+    // Skip sports / esports / combat / recurring-ticks / usage-counters.
+    if (isSkippedCategoryEvent(e.tags, e.slug)) {
       skippedSports++;
       continue;
     }

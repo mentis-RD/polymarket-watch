@@ -271,8 +271,8 @@ async function main(): Promise<void> {
       strippedShortCycle++;
       continue;
     }
-    // Sports / esports / combat skipped — see category-filter.ts.
-    if (isSkippedCategoryEvent(e.tags)) {
+    // Sports / esports / combat / recurring-ticks / usage-counters — see category-filter.ts.
+    if (isSkippedCategoryEvent(e.tags, e.slug)) {
       strippedSports++;
       continue;
     }

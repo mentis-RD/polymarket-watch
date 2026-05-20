@@ -136,22 +136,53 @@ const SKIP_TAG_SLUGS: Set<string> = new Set([
   // private knowledge. Keep general crypto news / project announcements
   // (those don't carry this tag).
   "crypto-prices",
+  // Stock / equity weekly-bracket ticks — "Will AAPL hit __ week of May 18?"
+  // "Will TSLA hit __ week of June 1?". Pyth-finance-backed price polling.
+  // Same shape as crypto-prices — pure speculation, no insider edge
+  // beyond what public traders already have via order books.
+  "hit-price",
+  "finance-updown",
+  "pyth-finance",
+  // Lottery jackpots — random number generator, zero insider edge.
+  "lottery",
+  "powerball",
 ]);
+
+/**
+ * Slug-pattern skips: noise patterns we don't tag-filter cleanly.
+ *
+ * - Public usage-counter ticks: "Will <X> commits hit __ by date?",
+ *   "Will MrBeast hit billion views by date?", "Will <product> subscribers
+ *   hit __ by date?". Anyone with grep / public API can count these, so
+ *   no asymmetric private knowledge.
+ */
+const SKIP_SLUG_RE =
+  /(?:^|[-])(?:commits|views|subscribers|followers|stars|downloads|mau|dau)-hit-/i;
+
+export function isSkippedSlug(slug: string): boolean {
+  return SKIP_SLUG_RE.test(slug);
+}
 
 function slugify(label: string): string {
   return label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
 /**
- * Returns true if the event has any tag we want to skip (sports family).
- * Pass the raw tags array from a PolyMarket / PolyEvent.
+ * Returns true if the event should be skipped. Combines tag-based skip
+ * (sports family + recurring-tick families + lottery) and slug-pattern
+ * skip (public usage-counter markets).
+ *
+ * Signature kept as `(tags)` for backward compat; new callers can pass
+ * the slug too via the optional second arg.
  */
-export function isSkippedCategoryEvent(tags?: PolyTag[]): boolean {
-  if (!tags) return false;
-  for (const t of tags) {
-    const s = slugify(t.label || "");
-    if (s && SKIP_TAG_SLUGS.has(s)) return true;
+export function isSkippedCategoryEvent(tags?: PolyTag[], slug?: string): boolean {
+  if (tags) {
+    for (const t of tags) {
+      const s = slugify(t.label || "");
+      if (s && SKIP_TAG_SLUGS.has(s)) return true;
+    }
   }
+  if (slug && isSkippedSlug(slug)) return true;
   return false;
 }
 
