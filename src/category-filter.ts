@@ -151,16 +151,37 @@ const SKIP_TAG_SLUGS: Set<string> = new Set([
 /**
  * Slug-pattern skips: noise patterns we don't tag-filter cleanly.
  *
- * - Public usage-counter ticks: "Will <X> commits hit __ by date?",
- *   "Will MrBeast hit billion views by date?", "Will <product> subscribers
- *   hit __ by date?". Anyone with grep / public API can count these, so
- *   no asymmetric private knowledge.
+ * Several families:
+ *
+ * 1) Public usage-counter ticks: "Will <X> commits hit __ by date?",
+ *    "Will MrBeast hit billion views by date?", "Will <product>
+ *    subscribers hit __ by date?". Anyone with grep / public API can
+ *    count these, so no asymmetric private knowledge.
+ *
+ * 2) Earthquake count / magnitude ticks: "How many 7.0+ earthquakes
+ *    by June 30?", "9.0+ earthquake before 2027?", "Magnitude 6.5 in
+ *    LA before 2027?". Earthquakes are genuinely unpredictable — no
+ *    public or private model has meaningful lead time on a specific
+ *    quake. Aggregate counts over months/years are climate-scale RNG.
+ *
+ * 3) Tornado count ticks: "How many tornadoes in the US in 2026?" —
+ *    annual aggregate, same shape.
+ *
+ * 4) Annual hurricane class: "Will any Category 4 hurricane make
+ *    landfall before 2027?". 1.5-year climate-scale uncertainty;
+ *    real edge only in short-window active-season tracking which is
+ *    a separate slug shape we keep.
  */
-const SKIP_SLUG_RE =
-  /(?:^|[-])(?:commits|views|subscribers|followers|stars|downloads|mau|dau)-hit-/i;
+const SKIP_SLUG_RES: RegExp[] = [
+  /(?:^|[-])(?:commits|views|subscribers|followers|stars|downloads|mau|dau)-hit-/i,
+  /(?:^|[-])how-many-.*-(?:earthquakes|tornadoes|hurricanes)\b/i,
+  /(?:^|[-])\d+pt\d+-or-above-earthquake/i,
+  /(?:^|[-])magnitude-\d+pt\d+-earthquake/i,
+  /(?:^|[-])will-any-(?:category|cat)-?\d+-hurricane/i,
+];
 
 export function isSkippedSlug(slug: string): boolean {
-  return SKIP_SLUG_RE.test(slug);
+  return SKIP_SLUG_RES.some((r) => r.test(slug));
 }
 
 function slugify(label: string): string {
