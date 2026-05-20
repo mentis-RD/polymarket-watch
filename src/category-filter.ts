@@ -146,6 +146,20 @@ const SKIP_TAG_SLUGS: Set<string> = new Set([
   // Lottery jackpots — random number generator, zero insider edge.
   "lottery",
   "powerball",
+  // NYMEX / COMEX futures price-bracket ticks — "Will Crude Oil (CL) hit
+  // \$200 by end of June?", "Will Gold (GC) settle at \$3800-\$4200 in June?".
+  // Same shape as stock weekly ticks (hit-price/pyth-finance) — Polymarket's
+  // own price polling against public commodities futures. Zero insider edge
+  // beyond what's already in COMEX/NYMEX order books.
+  "nymex-crude-oil-futures",
+  "nymex-natural-gas-futures",
+  "nymex-heating-oil-futures",
+  "nymex-rbob-gasoline-futures",
+  "comex-gold-futures",
+  "comex-silver-futures",
+  "comex-copper-futures",
+  "comex-platinum-futures",
+  "comex-palladium-futures",
 ]);
 
 /**
