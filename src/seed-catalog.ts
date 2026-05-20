@@ -26,7 +26,7 @@ import { log, err } from "./log.js";
 const OUTPUT_BASE = join(process.cwd(), "output");
 
 const SHORT_CYCLE_SLUG_RE =
-  /(?:^|[-])(?:updown|up-or-down|hourly|every-?hour|every-?day|every-?week|daily|weekly|1m|2m|5m|10m|15m|30m|1h|2h|4h|6h|8h|12h)(?:[-]|$|\d)/i;
+  /(?:^|[-])(?:updown|up-or-down|hourly|every-?hour|every-?day|every-?week|daily|weekly|1m|2m|5m|10m|15m|30m|1h|2h|4h|6h|8h|12h|highest-temperature-in|lowest-temperature-in)(?:[-]|$|\d)/i;
 
 const SHORT_CYCLE_TITLE_RE =
   /\b(?:up or down|updown|next \d+\s*(?:minutes?|hours?|min|hr))\b/i;

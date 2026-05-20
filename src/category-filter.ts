@@ -115,6 +115,15 @@ const SKIP_TAG_SLUGS: Set<string> = new Set([
   "valorant",
   "dota-2",
   "starcraft",
+  // Daily auto-recurring weather ticks — markets like
+  // `highest-temperature-in-cape-town-on-may-22-2026` with 10+ temperature
+  // bracket sub-markets. Tag set always includes daily-temperature plus
+  // highest-temperature OR lowest-temperature. Pure tick noise, zero
+  // insider edge (we keep real-weather events like hurricanes / earthquakes
+  // / disease outbreaks since those have actual subject-matter informants).
+  "daily-temperature",
+  "highest-temperature",
+  "lowest-temperature",
 ]);
 
 function slugify(label: string): string {
