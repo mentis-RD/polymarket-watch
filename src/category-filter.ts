@@ -124,6 +124,18 @@ const SKIP_TAG_SLUGS: Set<string> = new Set([
   "daily-temperature",
   "highest-temperature",
   "lowest-temperature",
+  // Service-uptime tick markets — "Will Claude go down on __ days in May?"
+  // and "Will ChatGPT outage on __ days in May?". Anthropic / OpenAI
+  // employees aren't betting on their own service going down (PR /
+  // legal nightmare), so zero insider edge.
+  "outage",
+  "downtime",
+  // Recurring crypto-price prediction markets — "Bitcoin price on May 21?"
+  // "Ethereum above $X on May 21?" "Bitcoin ETF flows on May 20?". This
+  // is Polymarket's own daily/weekly price tick game; not bettable on
+  // private knowledge. Keep general crypto news / project announcements
+  // (those don't carry this tag).
+  "crypto-prices",
 ]);
 
 function slugify(label: string): string {
