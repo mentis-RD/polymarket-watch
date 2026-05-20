@@ -162,3 +162,125 @@ export function parseClobTokenIds(market: PolyMarket): string[] {
   }
   return [];
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Events
+//
+// Polymarket models the user-visible "market" as an EVENT containing N
+// individual binary markets (e.g. "MSTR sells any BTC by ___?" event has
+// sub-markets for each cutoff date). Trading and review happens at the
+// event level — humans don't bet on isolated strikes, they bet on the
+// theme. Catalog and watchlist should operate on events accordingly.
+// ─────────────────────────────────────────────────────────────────────────
+
+export interface PolyEventMarket {
+  id: string;
+  slug: string;
+  question: string;
+  conditionId?: string;
+  outcomes?: string;
+  outcomePrices?: string;
+  volume?: string;
+  volumeNum?: number;
+  liquidity?: string;
+  liquidityNum?: number;
+  clobTokenIds?: string;
+  endDate?: string;
+  closed?: boolean;
+  archived?: boolean;
+  groupItemTitle?: string;
+}
+
+export interface PolyEventFull {
+  id: string;
+  slug: string;
+  ticker?: string;
+  title: string;
+  description?: string;
+  startDate?: string;
+  endDate?: string;
+  active?: boolean;
+  closed?: boolean;
+  archived?: boolean;
+  featured?: boolean;
+  liquidity?: number;
+  volume?: number;
+  volume24hr?: number;
+  volume1wk?: number;
+  volume1mo?: number;
+  openInterest?: number;
+  competitive?: number;
+  commentCount?: number;
+  markets?: PolyEventMarket[];
+  tags?: PolyTag[];
+}
+
+interface FetchEventsOpts {
+  limit?: number;
+  offset?: number;
+  closed?: boolean;
+  active?: boolean;
+  order?: string;
+  ascending?: boolean;
+}
+
+async function fetchEventsPage(opts: FetchEventsOpts = {}): Promise<PolyEventFull[]> {
+  const params = new URLSearchParams();
+  params.set("limit", String(opts.limit ?? 100));
+  params.set("offset", String(opts.offset ?? 0));
+  if (opts.closed !== undefined) params.set("closed", String(opts.closed));
+  if (opts.active !== undefined) params.set("active", String(opts.active));
+  params.set("order", opts.order ?? "endDate");
+  params.set("ascending", String(opts.ascending ?? true));
+  params.set("include_tag", "true");
+
+  const url = `${BASE}/events?${params.toString()}`;
+  const res = await request(url);
+  if (res.statusCode !== 200) {
+    throw new Error(`Gamma /events ${res.statusCode}: ${await res.body.text()}`);
+  }
+  const data = (await res.body.json()) as PolyEventFull[];
+  if (!Array.isArray(data)) {
+    throw new Error(`Gamma /events non-array response: ${JSON.stringify(data).slice(0, 200)}`);
+  }
+  return data;
+}
+
+/**
+ * Paginate through open events. Same offset-cap behaviour as /markets
+ * (Gamma returns 422 once you exceed ~10k offset). Returns events sorted
+ * by ascending endDate so the soonest-to-resolve come first.
+ */
+export async function fetchOpenEvents(opts: {
+  maxPages?: number;
+  pageSize?: number;
+  pageDelayMs?: number;
+} = {}): Promise<PolyEventFull[]> {
+  const maxPages = opts.maxPages ?? 200;
+  const pageSize = opts.pageSize ?? 100;
+  const delay = opts.pageDelayMs ?? 200;
+  const out: PolyEventFull[] = [];
+  for (let i = 0; i < maxPages; i++) {
+    let page: PolyEventFull[];
+    try {
+      page = await fetchEventsPage({
+        limit: pageSize,
+        offset: i * pageSize,
+        closed: false,
+        order: "endDate",
+        ascending: true,
+      });
+    } catch (e) {
+      if (((e as Error).message || "").includes("offset exceeds maximum")) {
+        log("gamma", `events: hit offset cap at page ${i + 1} (${out.length} events); stopping`);
+        break;
+      }
+      throw e;
+    }
+    if (page.length === 0) break;
+    out.push(...page);
+    if (page.length < pageSize) break;
+    if (delay > 0) await sleep(delay);
+  }
+  return out;
+}

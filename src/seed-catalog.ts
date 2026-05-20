@@ -6,20 +6,16 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { join } from "node:path";
 
-import {
-  fetchNewestMarkets,
-  marketUrl,
-  type PolyMarket,
-  type PolyTag,
-} from "./polymarket-api.js";
+import { fetchOpenEvents, type PolyEventFull, type PolyTag } from "./polymarket-api.js";
 import { sendDocument } from "./telegram.js";
 import { log, err } from "./log.js";
 
 /**
- * Bootstrap a catalog of currently-open Polymarket markets, grouped by primary
- * tag, with short-cycle noise stripped. NOT a pre-filter on volume/liquidity —
- * a thin market today may be tomorrow's insider target. Use this output as
- * a one-time human-review pass to populate watchlist.
+ * Bootstrap a catalog of currently-open Polymarket EVENTS (not individual
+ * markets). Each row in each output CSV is one event — humans trade themes,
+ * not isolated binary strikes. Sub-market metadata is rolled up into a few
+ * informational columns; the event_slug + condition_ids let downstream tools
+ * (watchlist, monitor) expand to per-market subscriptions.
  *
  * Run:
  *   npx tsx src/seed-catalog.ts            # output/catalog_<date>/
@@ -28,11 +24,6 @@ import { log, err } from "./log.js";
 
 const OUTPUT_BASE = join(process.cwd(), "output");
 
-/**
- * Slugs that look algorithmically generated for recurring price ticks
- * (e.g. `xrp-updown-15m-1779129000`, `btc-up-or-down-this-hour`). These
- * dominate the open-markets list and add zero insider-detection value.
- */
 const SHORT_CYCLE_SLUG_RE =
   /(?:^|[-])(?:updown|up-or-down|hourly|every-?hour|every-?day|every-?week|daily|weekly|1m|2m|5m|10m|15m|30m|1h|2h|4h|6h|8h|12h)(?:[-]|$|\d)/i;
 
@@ -41,31 +32,35 @@ const SHORT_CYCLE_TITLE_RE =
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-interface CatalogRow {
-  slug: string;
+interface CatalogEventRow {
+  event_slug: string;
   title: string;
-  category: string; // primary tag (used for file routing)
-  tags: string; // ALL tags, pipe-separated — for downstream filtering
-  event_slug: string; // Polymarket event grouping (multiple markets per event)
-  condition_id: string;
+  category: string;
+  tags: string; // pipe-separated, slugged, ALL tags incl. internal
   end_date: string;
   start_date: string;
   days_to_end: number;
-  volume_total: number;
+  num_markets: number;
+  open_markets: number;
   volume_24h: number;
+  volume_total: number;
   liquidity: number;
+  open_interest: number;
+  competitive: number;
+  comment_count: number;
+  sub_market_slugs: string; // pipe-separated child slugs
+  condition_ids: string; // pipe-separated child conditionIds (for API/cluster use)
   description: string;
   url: string;
 }
 
-function isShortCycle(m: PolyMarket): boolean {
-  if (SHORT_CYCLE_SLUG_RE.test(m.slug)) return true;
-  if (m.question && SHORT_CYCLE_TITLE_RE.test(m.question)) return true;
-  // Duration-based fallback: if the market opened and closes within 24h
-  // it's almost certainly a tick market.
-  if (m.startDate && m.endDate) {
-    const start = Date.parse(m.startDate);
-    const end = Date.parse(m.endDate);
+function isShortCycleEvent(e: PolyEventFull): boolean {
+  if (SHORT_CYCLE_SLUG_RE.test(e.slug)) return true;
+  if (e.title && SHORT_CYCLE_TITLE_RE.test(e.title)) return true;
+  // Duration-based fallback at event level.
+  if (e.startDate && e.endDate) {
+    const start = Date.parse(e.startDate);
+    const end = Date.parse(e.endDate);
     if (Number.isFinite(start) && Number.isFinite(end) && end - start < DAY_MS) {
       return true;
     }
@@ -73,7 +68,6 @@ function isShortCycle(m: PolyMarket): boolean {
   return false;
 }
 
-/** Tags that are Polymarket internal config, not topic categories. */
 const STOP_TAG_RE =
   /^(?:all|trending|new|featured|hot|hide-from-new|rewards-?\d|earn-?\d|hip3|fuse-energy|platinum-glove|pre-market|comex-.*-futures|nymex-.*-futures|main-election|rewards-?[\d-]+|parlays|prediction-markets)$/i;
 
@@ -81,12 +75,6 @@ function slugify(label: string): string {
   return label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
-/**
- * Pick a primary category tag. Skips internal/config tags (rewards-*,
- * hide-from-new, exchange names, etc) and prefers broad topical tags when
- * available. Polymarket's tag order is NOT semantically meaningful —
- * "Rewards 50, 4.5, 20" frequently shows up first for election markets.
- */
 const TOP_LEVEL_PREFERRED = [
   "politics",
   "geopolitics",
@@ -144,12 +132,10 @@ function primaryTag(tags?: PolyTag[]): string {
     slugged.push(s);
   }
   if (slugged.length === 0) return "uncategorized";
-  // First pass: any top-level preferred tag wins, in preference order.
   const preferred = new Set(TOP_LEVEL_PREFERRED);
   for (const target of TOP_LEVEL_PREFERRED) {
     if (slugged.includes(target)) return target;
   }
-  // Second pass: first non-preferred tag (i.e. specific topic like "ukraine").
   for (const s of slugged) {
     if (!preferred.has(s)) return s;
   }
@@ -158,34 +144,43 @@ function primaryTag(tags?: PolyTag[]): string {
 
 function allTagsPipe(tags?: PolyTag[]): string {
   if (!tags || tags.length === 0) return "";
-  // Keep ALL tags including internal ones (rewards-*, hide-from-new, ...)
-  // — user can grep/filter them out, and having them visible is useful info.
-  // Slugged form so it grep's cleanly without case-sensitivity surprises.
   return tags
     .map((t) => slugify(t.label || ""))
     .filter((s) => s.length > 0)
     .join("|");
 }
 
-function toRow(m: PolyMarket): CatalogRow {
+function toRow(e: PolyEventFull): CatalogEventRow {
   const now = Date.now();
-  const endTs = m.endDate ? Date.parse(m.endDate) : NaN;
-  const daysToEnd = Number.isFinite(endTs) ? Math.max(0, Math.round((endTs - now) / DAY_MS)) : -1;
+  const endTs = e.endDate ? Date.parse(e.endDate) : NaN;
+  const daysToEnd = Number.isFinite(endTs)
+    ? Math.max(0, Math.round((endTs - now) / DAY_MS))
+    : -1;
+  const markets = e.markets ?? [];
+  const openMarkets = markets.filter((m) => !m.closed && !m.archived);
   return {
-    slug: m.slug,
-    title: m.question || "",
-    category: primaryTag(m.tags),
-    tags: allTagsPipe(m.tags),
-    event_slug: m.events?.[0]?.slug || "",
-    condition_id: m.conditionId || "",
-    end_date: m.endDate || "",
-    start_date: m.startDate || "",
+    event_slug: e.slug,
+    title: e.title || "",
+    category: primaryTag(e.tags),
+    tags: allTagsPipe(e.tags),
+    end_date: e.endDate || "",
+    start_date: e.startDate || "",
     days_to_end: daysToEnd,
-    volume_total: m.volumeNum ?? 0,
-    volume_24h: m.volume24hr ?? 0,
-    liquidity: m.liquidityNum ?? 0,
-    description: (m.description || "").replace(/\s+/g, " ").trim().slice(0, 280),
-    url: marketUrl(m.slug),
+    num_markets: markets.length,
+    open_markets: openMarkets.length,
+    volume_24h: e.volume24hr ?? 0,
+    volume_total: e.volume ?? 0,
+    liquidity: e.liquidity ?? 0,
+    open_interest: e.openInterest ?? 0,
+    competitive: e.competitive ?? 0,
+    comment_count: e.commentCount ?? 0,
+    sub_market_slugs: markets.map((m) => m.slug).filter(Boolean).join("|"),
+    condition_ids: markets
+      .map((m) => m.conditionId)
+      .filter((id): id is string => !!id)
+      .join("|"),
+    description: (e.description || "").replace(/\s+/g, " ").trim().slice(0, 300),
+    url: `https://polymarket.com/event/${e.slug}`,
   };
 }
 
@@ -198,49 +193,51 @@ function csvEscape(v: unknown): string {
   return s;
 }
 
-function rowsToCsv(rows: CatalogRow[]): string {
-  // Column order chosen for at-a-glance scanning in a spreadsheet:
-  //   slug / title / category / tags / event_slug    — identity & grouping
-  //   end_date / days_to_end / start_date            — timing
-  //   volume_24h / volume_total / liquidity          — informational, NOT filtered upstream
-  //   description / polymarket_url / condition_id    — context & API refs
-  //
-  // The `tags` column is pipe-separated (`politics|elections|trump|2026`) so
-  // you can grep/filter without comma collisions: in Excel filter by "contains
-  // trump", in CLI: `grep -E '[,"]tags[^,]*\\|trump\\|' file.csv` or simpler
-  // `awk -F, 'NR==1 || $4 ~ /lebron/' politics.csv`.
+function rowsToCsv(rows: CatalogEventRow[]): string {
+  // Identity first, then timing, then aggregate stats (informational only),
+  // then sub-market expansion (for /watch_event etc), then context.
   const headers = [
-    "slug",
+    "event_slug",
     "title",
     "category",
     "tags",
-    "event_slug",
     "end_date",
     "days_to_end",
     "start_date",
+    "num_markets",
+    "open_markets",
     "volume_24h",
     "volume_total",
     "liquidity",
+    "open_interest",
+    "competitive",
+    "comment_count",
+    "sub_market_slugs",
+    "condition_ids",
     "description",
     "polymarket_url",
-    "condition_id",
   ];
   const lines = rows.map((r) =>
     [
-      r.slug,
+      r.event_slug,
       r.title,
       r.category,
       r.tags,
-      r.event_slug,
       r.end_date,
       r.days_to_end,
       r.start_date,
+      r.num_markets,
+      r.open_markets,
       r.volume_24h.toFixed(2),
       r.volume_total.toFixed(2),
       r.liquidity.toFixed(2),
+      r.open_interest.toFixed(2),
+      r.competitive.toFixed(3),
+      r.comment_count,
+      r.sub_market_slugs,
+      r.condition_ids,
       r.description,
       r.url,
-      r.condition_id,
     ]
       .map(csvEscape)
       .join(","),
@@ -254,47 +251,40 @@ async function main(): Promise<void> {
   const outDir = join(OUTPUT_BASE, `catalog_${dateKey}`);
   mkdirSync(outDir, { recursive: true });
 
-  log("seed-catalog", "fetching open markets (paginated)...");
-  // fetchNewestMarkets paginates with closed=false until Gamma's offset cap.
-  const all = await fetchNewestMarkets({
-    maxPages: 200, // hit the cap (~10k markets); harmless if fewer
-    pageSize: 100,
-    pageDelayMs: 200,
-  });
-  log("seed-catalog", `fetched ${all.length} open markets`);
+  log("seed-catalog", "fetching open events (paginated, ordered by endDate asc)...");
+  const all = await fetchOpenEvents({ maxPages: 200, pageSize: 100, pageDelayMs: 200 });
+  log("seed-catalog", `fetched ${all.length} open events`);
 
   let kept = 0;
   let strippedShortCycle = 0;
   let strippedExpired = 0;
+  let totalSubMarkets = 0;
   const now = Date.now();
-  const byCategory = new Map<string, CatalogRow[]>();
+  const byCategory = new Map<string, CatalogEventRow[]>();
 
-  for (const m of all) {
-    if (!m.slug) continue;
-    if (m.closed || m.archived) continue;
-    if (isShortCycle(m)) {
+  for (const e of all) {
+    if (!e.slug) continue;
+    if (e.closed || e.archived) continue;
+    if (isShortCycleEvent(e)) {
       strippedShortCycle++;
       continue;
     }
-    // Skip markets whose end_date is already in the past — they're awaiting
-    // UMA resolution and aren't actionable. (Polymarket leaves these "open"
-    // in the API until resolution clears.)
-    if (m.endDate) {
-      const endTs = Date.parse(m.endDate);
+    if (e.endDate) {
+      const endTs = Date.parse(e.endDate);
       if (Number.isFinite(endTs) && endTs < now) {
         strippedExpired++;
         continue;
       }
     }
-    const row = toRow(m);
+    const row = toRow(e);
+    totalSubMarkets += row.num_markets;
     const arr = byCategory.get(row.category) ?? [];
     arr.push(row);
     byCategory.set(row.category, arr);
     kept++;
   }
 
-  // Sort each category by end_date ascending (closest first), with markets
-  // missing end_date pushed to the bottom.
+  // Sort each category by end_date asc (closest first); -1 (no end_date) last.
   for (const arr of byCategory.values()) {
     arr.sort((a, b) => {
       const ae = a.days_to_end < 0 ? Number.POSITIVE_INFINITY : a.days_to_end;
@@ -303,25 +293,28 @@ async function main(): Promise<void> {
     });
   }
 
-  // Write per-category CSV.
-  const indexRows: { category: string; file: string; count: number }[] = [];
-  for (const [category, arr] of [...byCategory.entries()].sort((a, b) => b[1].length - a[1].length)) {
+  const indexRows: { category: string; file: string; events: number; sub_markets: number }[] = [];
+  for (const [category, arr] of [...byCategory.entries()].sort(
+    (a, b) => b[1].length - a[1].length,
+  )) {
     const file = `${category}.csv`;
     writeFileSync(join(outDir, file), rowsToCsv(arr));
-    indexRows.push({ category, file, count: arr.length });
+    const submarkets = arr.reduce((s, r) => s + r.num_markets, 0);
+    indexRows.push({ category, file, events: arr.length, sub_markets: submarkets });
   }
 
-  // Index file
   const indexCsv =
-    ["category", "file", "count"].join(",") +
+    ["category", "file", "events", "sub_markets"].join(",") +
     "\n" +
-    indexRows.map((r) => [r.category, r.file, r.count].map(csvEscape).join(",")).join("\n") +
+    indexRows
+      .map((r) => [r.category, r.file, r.events, r.sub_markets].map(csvEscape).join(","))
+      .join("\n") +
     "\n";
   writeFileSync(join(outDir, "_index.csv"), indexCsv);
 
   log(
     "seed-catalog",
-    `wrote ${indexRows.length} categories, ${kept} kept, ${strippedShortCycle} short-cycle + ${strippedExpired} expired stripped → ${outDir}`,
+    `wrote ${indexRows.length} categories, ${kept} events (${totalSubMarkets} sub-markets) kept, ${strippedShortCycle} short-cycle + ${strippedExpired} expired stripped → ${outDir}`,
   );
 
   if (sendTg) {
@@ -342,7 +335,7 @@ async function main(): Promise<void> {
       chatId: chat,
       threadId: thread || undefined,
       filePath: archive,
-      caption: `📚 Initial markets catalog ${dateKey}\n${indexRows.length} categories, ${kept} markets (short-cycle stripped)\nReview, /watch interesting slugs.`,
+      caption: `📚 Polymarket EVENTS catalog ${dateKey}\n${indexRows.length} categories, ${kept} events (${totalSubMarkets} sub-markets), short-cycle + expired stripped\nReview, /watch_event <event_slug> to monitor all sub-markets.`,
     });
     log("seed-catalog", `TG send: ${ok ? "ok" : "failed"}`);
   }
