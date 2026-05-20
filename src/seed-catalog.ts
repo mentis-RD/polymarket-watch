@@ -8,6 +8,7 @@ import { join } from "node:path";
 
 import { fetchOpenEvents, type PolyEventFull, type PolyTag } from "./polymarket-api.js";
 import { sendDocument } from "./telegram.js";
+import { isSkippedCategoryEvent } from "./category-filter.js";
 import { log, err } from "./log.js";
 
 /**
@@ -258,6 +259,7 @@ async function main(): Promise<void> {
   let kept = 0;
   let strippedShortCycle = 0;
   let strippedExpired = 0;
+  let strippedSports = 0;
   let totalSubMarkets = 0;
   const now = Date.now();
   const byCategory = new Map<string, CatalogEventRow[]>();
@@ -267,6 +269,11 @@ async function main(): Promise<void> {
     if (e.closed || e.archived) continue;
     if (isShortCycleEvent(e)) {
       strippedShortCycle++;
+      continue;
+    }
+    // Sports / esports / combat skipped — see category-filter.ts.
+    if (isSkippedCategoryEvent(e.tags)) {
+      strippedSports++;
       continue;
     }
     if (e.endDate) {
@@ -314,7 +321,7 @@ async function main(): Promise<void> {
 
   log(
     "seed-catalog",
-    `wrote ${indexRows.length} categories, ${kept} events (${totalSubMarkets} sub-markets) kept, ${strippedShortCycle} short-cycle + ${strippedExpired} expired stripped → ${outDir}`,
+    `wrote ${indexRows.length} categories, ${kept} events (${totalSubMarkets} sub-markets) kept, ${strippedShortCycle} short-cycle + ${strippedExpired} expired + ${strippedSports} sports stripped → ${outDir}`,
   );
 
   if (sendTg) {

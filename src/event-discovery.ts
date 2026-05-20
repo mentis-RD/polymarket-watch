@@ -9,6 +9,7 @@ import { fetchOpenEvents, type PolyEventFull } from "./polymarket-api.js";
 import { heartbeat } from "./heartbeat.js";
 import { notifyErrors } from "./telegram.js";
 import { writeJsonAtomic } from "./atomic-write.js";
+import { isSkippedCategoryEvent } from "./category-filter.js";
 import { log, err } from "./log.js";
 
 const STATE_DIR = join(process.cwd(), "state");
@@ -103,8 +104,14 @@ async function discoveryCycle(): Promise<void> {
   });
 
   const newOnes: PolyEventFull[] = [];
+  let skippedSports = 0;
   for (const e of all) {
     if (!e.slug) continue;
+    // Skip sports / esports / combat — they're not insider-detection targets.
+    if (isSkippedCategoryEvent(e.tags)) {
+      skippedSports++;
+      continue;
+    }
     if (e.slug in seen) continue;
     seen[e.slug] = {
       first_seen_ts: now,
@@ -123,12 +130,13 @@ async function discoveryCycle(): Promise<void> {
   log(
     "discovery",
     coldStart
-      ? `cold-start seed: ${all.length} events indexed, 0 alerts emitted`
-      : `cycle done. fetched=${all.length} new=${newOnes.length} total_seen=${Object.keys(seen).length}`,
+      ? `cold-start seed: ${all.length} events fetched, ${skippedSports} sports skipped, ${Object.keys(seen).length} indexed, 0 alerts`
+      : `cycle done. fetched=${all.length} sports_skipped=${skippedSports} new=${newOnes.length} total_seen=${Object.keys(seen).length}`,
   );
 
   heartbeat("event-discovery", {
     fetched: all.length,
+    sports_skipped: skippedSports,
     new: newOnes.length,
     cold_start: coldStart,
     total_seen: Object.keys(seen).length,
