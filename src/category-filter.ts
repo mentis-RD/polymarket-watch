@@ -210,6 +210,22 @@ const SKIP_SLUG_RES: RegExp[] = [
   //    polling. Note the 'hit-in-<month>' shape is distinct from legit
   //    'reach-by-<date>' valuation milestone markets which we keep.
   /^what-price-will-[a-z0-9-]+-hit-in-(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)-\d+/i,
+  // 8) Music chart-position weekly/aggregate ticks — Billboard 200,
+  //    Billboard Hot 100, Spotify weekly top artist/song, "how many
+  //    spots/weeks/albums on billboard" aggregates, "first-week album
+  //    sales" brackets, "which artists will have N #1 hits". Chart data
+  //    is Luminate/Spotify public reporting; the people with lead-time
+  //    edge (radio/label data analysts) don't bet on Polymarket. Note
+  //    we deliberately don't tag-filter on `billboard`/`spotify` — those
+  //    tags also sit on release-date / featuring-list markets (Ariana
+  //    Grande's `petal` album) where label insiders CAN have leaks.
+  /^billboard-(?:200|hot-100|\d+-artist)/i,
+  /^how-many-(?:spots|weeks|albums|songs).*billboard/i,
+  /-first-week-album-sales(?:-|$)/i,
+  /^\d+-song-on-(?:us-)?spotify-this-week-/i,
+  /^(?:top|\d+)-spotify-artist-/i,
+  /^which-artists-will-have-(?:a-billboard-)?\d+-(?:hits?|songs?|albums?)/i,
+  /^will-[a-z-]+-have-the-top-\d+-albums-on-the-billboard/i,
 ];
 
 export function isSkippedSlug(slug: string): boolean {
