@@ -219,7 +219,7 @@ const SKIP_TAG_SLUGS: Set<string> = new Set([
  */
 const SKIP_SLUG_RES: RegExp[] = [
   /(?:^|[-])(?:commits|views|subscribers|followers|stars|downloads|mau|dau)-hit-/i,
-  /(?:^|[-])how-many-.*-(?:earthquakes|tornadoes|hurricanes)\b/i,
+  /(?:^|[-])how-many-(?:[a-z0-9-]*-)?(?:earthquakes|tornadoes|hurricanes)\b/i,
   /(?:^|[-])\d+pt\d+-or-above-earthquake/i,
   /(?:^|[-])magnitude-\d+pt\d+-earthquake/i,
   /(?:^|[-])will-any-(?:category|cat)-?\d+-hurricane/i,
@@ -481,6 +481,64 @@ const SKIP_SLUG_RES: RegExp[] = [
   //     launch-a-token-by` (which has team insider edge); this is platform-
   //     aggregate dollar-volume macro bracket.
   /^how-much-will-[a-z][a-z-]+-token-sales?-raise-in-\d{4}/i,
+  // === AUDIT-PASS RULES 45-56 (self-review sweep) ===
+  // 45) Tweet / Truth-Social post count weekly+monthly brackets —
+  //     "<person>-of-tweets-may-15-may-22", "elon-musk-of-tweets-may-2026",
+  //     "donald-trump-of-truth-social-posts-may-15-may-22". Public counter.
+  /^[a-z][a-z-]+-of-(?:tweets|truth-social-posts|truth-posts|posts)(?:-|$)/i,
+  // 46) Trump speech/post/mention categorical brackets — "what-will-trump-
+  //     say-this-week-may-24", "what-will-trump-say-in-may", "what-animals-
+  //     will-trump-say-in-may", "what-trump-named-things-will-trump-
+  //     mention-in-may". Categorical pick from word list; weekly/monthly/
+  //     event-tied auto-poll. `announce` deliberately excluded to spare
+  //     `what-will-trump-announce-as-next-X` admin-decision events.
+  /^what-(?:will-)?trump-(?:say|post|tweet|mention|do)-/i,
+  /^what-(?:animals|trump-named-things|colors|words|topics)-(?:will-)?trump-/i,
+  // 47) "Who will Trump publicly insult/praise/meet-with/speak-to" weekly+
+  //     monthly auto-poll. Anchored to month-name or this-week so single-
+  //     shot annual variants survive (e.g. who-will-trump-meet-with-in-
+  //     2026 could have diplomatic insider edge).
+  /^who-will-trump-(?:publicly-)?(?:insult|praise|meet-with|speak-to|attack|criticize|endorse)-(?:this-week|(?:by|in|on)-(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december))/i,
+  // 48) Approval-rating brackets — "how-high-will-trumps-approval-rating-
+  //     go-in-2026", "trump-approval-rating-on-may-22". Polling aggregate.
+  //     Future-proofed across politicians.
+  /^how-(?:high|low)-will-[a-z][a-z-]+s?-approval-rating-/i,
+  /^[a-z][a-z-]+s?-approval-rating-on-/i,
+  // 49) Congressional retirement / primary-loss aggregate counts —
+  //     individual events have DC-press insider channels but the
+  //     aggregate-count bracket is auto-poll noise.
+  /^how-many-(?:republican|democratic|gop|dem)-(?:(?:house|senate|gubernatorial)-)?(?:members?|senators?|incumbents?|governors?|representatives?)-(?:not-running|will-not-win)/i,
+  // 50) Trump action counts — "how-many-pieces-of-legislation-will-trump-
+  //     sign-into-law-in-may" (monthly), "how-many-gold-cards-will-trump-
+  //     sell-in-2026" (annual).
+  /^how-many-(?:pieces-of-legislation|gold-cards|executive-orders|signing-statements)-(?:will-)?trump-/i,
+  // 51) SpaceX launch count brackets — monthly/annual launch counts
+  //     including Starship-specific. Launches publicly announced.
+  /^how-many-spacex(?:-starship)?-launches-/i,
+  // 52) Space weather event count — weekly aggregate of solar events.
+  //     NOAA SWPC public.
+  /^how-many-major-space-weather-events-/i,
+  // 53) Crypto on-chain / aggregator metric brackets in question shape —
+  //     volatility index, gas price, TVL, open-interest, revenue, mindshare.
+  //     All resolve on public CoinGecko/DefiLlama/protocol-dashboard data.
+  /^what-will-(?:the-)?[a-z][a-z0-9-]+-(?:volatility-index|gas-price|open-interest|revenue|tvl|mindshare)-(?:hit|reach|be|go)/i,
+  /^how-many-coins-launched-in-\d{4}/i,
+  // 54) Geopolitical aggregate counters — Hormuz transit, missile tests,
+  //     airstrikes etc. Public AIS / DPRK observation / OSINT.
+  /^how-many-ships-(?:transit|pass|cross)-/i,
+  /^number-of-(?:[a-z][a-z-]+-)?(?:missile-tests?|nuclear-tests?|drone-strikes?|airstrikes?)-/i,
+  // 55) Misc daily/weekly auto-polls — podcast topic categoricals, AI
+  //     leaderboard daily, robot package counters, OPEC monthly above,
+  //     Polymarket self-referential "mindshare" bracket.
+  /^what-will-be-said-on-the-next-/i,
+  /^best-ai-model-on-(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)-/i,
+  /^of-packages-pushed-/i,
+  /^will-figures?-f\d+-robots-run-without-failure-through-/i,
+  /^opec-crude-oil-production-(?:above|below|hit)-in-/i,
+  /^how-(?:high|low)-will-polymarkets?-mindshare-/i,
+  // 56) Tesla quarterly delivery count — companion to rule 18 quarterly
+  //     metric brackets in `how-many-` shape rather than `will-X-q[N]-...`.
+  /^how-many-tesla-deliveries-in-q[1-4]-/i,
 ];
 
 export function isSkippedSlug(slug: string): boolean {
