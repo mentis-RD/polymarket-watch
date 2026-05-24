@@ -174,6 +174,16 @@ const SKIP_TAG_SLUGS: Set<string> = new Set([
   "unemployment",
   "nonfarm-payroll",
   "nfp",
+  // Entertainment auto-poll bracket families. Critic-aggregate scores,
+  // Netflix Top-N viewership rankings, weekend box office numbers — all
+  // public-data brackets that Polymarket factory-generates per release.
+  // Studio/distribution insiders don't bet on Polymarket. `mrbeast` is
+  // NOT added (despite same noise on views/subs counters) because the
+  // tag also sits on unrelated political events — slug-anchored rule 36.
+  "rotten-tomatoes",
+  "top-netflix",
+  "box-office",
+  "tsa",
 ]);
 
 /**
@@ -403,6 +413,14 @@ const SKIP_SLUG_RES: RegExp[] = [
   //     end-of-period; same logic as rule 23 / 29 but with explicit
   //     "official" qualifier.
   /^[a-z][a-z-]+-official-(?:usd|eur|gbp|jpy|cny)-exchange-rate-/i,
+  // 36) MrBeast views/subscribers milestone brackets — public YouTube
+  //     counter polling, same noise family as the existing usage-counter
+  //     rule but with a different slug shape (`hit-N-views-by-` vs the
+  //     existing `views-hit-`). Doesn't tag-skip `mrbeast` since that
+  //     tag also sits on unrelated political/personal events (will-mrbeast-
+  //     get-married-by-december-31, who-will-trump-meet-with-in-2026,
+  //     democratic-presidential-nominee-2028 all carry the tag).
+  /mrbeast.*(?:views?|subscribers?)|(?:views?|subscribers?).*mrbeast/i,
 ];
 
 export function isSkippedSlug(slug: string): boolean {
