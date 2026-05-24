@@ -145,7 +145,14 @@ async function pollLoop(): Promise<void> {
     let totalNew = 0;
 
     const lastTs = loadLastTs();
-    for (const s of subs) {
+    // Mid-cycle heartbeat: with 4K+ sub-markets one cycle can take hours
+    // (sequential REST polls + per-wallet alchemy lookups). Heartbeating
+    // only at cycle end would trigger watchdog stale-alert spam. Beat
+    // every HB_INTERVAL_MS regardless of cycle position.
+    const HB_INTERVAL_MS = 60_000;
+    let lastHb = Date.now();
+    for (let i = 0; i < subs.length; i++) {
+      const s = subs[i];
       const entry = wl[s.eventSlug];
       if (!entry) continue;
       const n = await pollMarket(
@@ -160,6 +167,20 @@ async function pollLoop(): Promise<void> {
         lastTs,
       );
       totalNew += n;
+      if (Date.now() - lastHb > HB_INTERVAL_MS) {
+        const ps = poolStatus();
+        heartbeat("trade-enricher", {
+          events: Object.keys(wl).length,
+          sub_markets: subs.length,
+          progress: i + 1,
+          new_trades: totalNew,
+          alchemy_keys: ps.keys,
+          alchemy_exhausted: ps.exhausted,
+          cycle: cycleNum,
+          in_cycle: true,
+        });
+        lastHb = Date.now();
+      }
     }
     if (totalNew > 0) saveLastTs(lastTs);
 

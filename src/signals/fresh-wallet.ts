@@ -153,28 +153,39 @@ async function fireAlert(
   const thread = process.env.TG_THREAD_FRESH;
   if (!chat) return;
 
+  const endShort = meta.end_date ? meta.end_date.slice(0, 10) : "";
+  const dominantOutcome = dominantIdx === 0 ? "YES" : "NO";
+  const notional = `$${Math.round(net).toLocaleString("en-US")}`;
+  const shortAddr = `${profile.wallet.slice(0, 6)}…${profile.wallet.slice(-4)}`;
   const ageTxt =
     profile.age_days === null
-      ? "*no $1k+ USDC inflow on record (hidden funding)*"
+      ? "no $1k+ USDC inflow on record"
       : `${profile.age_days}d since first $1k+ USDC inflow`;
-  const endShort = meta.end_date ? meta.end_date.slice(0, 10) : "";
-  const dominantOutcome = dominantIdx === 0 ? "Yes" : "No";
+  const subDetail = meta.sub_slug && meta.sub_slug !== meta.event_slug
+    ? ` (sub: \`${escapeMd(meta.sub_slug)}\`)`
+    : "";
+
   const header = noInflowPath
-    ? `🚨 *Fresh wallet (hidden funding)* — event \`${escapeMd(meta.event_slug)}\``
-    : `🚨 *Fresh wallet* — event \`${escapeMd(meta.event_slug)}\``;
+    ? "🚨 *Fresh wallet — hidden funding*"
+    : "🚨 *Fresh wallet*";
+
+  // Title links to polymarket event page; wallet links to polygonscan.
+  // Compact 3-block layout: header / market+activity / wallet+funding.
+  const titleLink = `[${escapeMd(meta.event_title || meta.event_slug)}](https://polymarket.com/event/${meta.event_slug})`;
+  const walletLink = `[${shortAddr}](https://polygonscan.com/address/${profile.wallet})`;
+
+  const activityLineParts = [`${notional} *${dominantOutcome}* @${trade.price.toFixed(2)}${subDetail}`];
+  if (endShort) activityLineParts.push(`ends ${endShort}`);
 
   const text = [
     header,
-    `_${escapeMd(meta.event_title)}_`,
-    `wallet \`${profile.wallet}\` score=${profile.score}/10`,
+    "",
+    titleLink,
+    activityLineParts.join(" · "),
+    "",
+    `${walletLink} · score ${profile.score}/10`,
     ageTxt,
-    `24h event-wide net ${dominantOutcome}: $${net.toFixed(0)} (latest sub \`${escapeMd(meta.sub_slug)}\` @${trade.price.toFixed(2)})`,
-    endShort ? `⏳ ends ${endShort}` : null,
-    `https://polymarket.com/event/${meta.event_slug}`,
-    `https://polygonscan.com/address/${profile.wallet}`,
-  ]
-    .filter((x) => x)
-    .join("\n");
+  ].join("\n");
 
   await sendMessage({
     chatId: chat,
