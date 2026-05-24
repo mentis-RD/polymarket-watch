@@ -1,5 +1,5 @@
 category,file,events
-politics,politics.csv,1356
+politics,politics.csv,1355
 crypto,crypto.csv,165
 culture,culture.csv,154
 geopolitics,geopolitics.csv,92
@@ -7,7 +7,7 @@ tech,tech.csv,84
 business,business.csv,62
 science,science.csv,25
 finance,finance.csv,20
-economy,economy.csv,8
+economy,economy.csv,1
 weather,weather.csv,6
 elections,elections.csv,6
 ipo,ipo.csv,1

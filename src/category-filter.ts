@@ -172,6 +172,8 @@ const SKIP_TAG_SLUGS: Set<string> = new Set([
   "gdp",
   "parcl",
   "unemployment",
+  "nonfarm-payroll",
+  "nfp",
 ]);
 
 /**
@@ -380,6 +382,27 @@ const SKIP_SLUG_RES: RegExp[] = [
   // 31) Trade deficit/surplus brackets — "us-trade-deficit-in-2026". BEA /
   //     national-statistics-agency release, bracket on public number.
   /^(?:us|china|eurozone|uk|japan|germany|france|italy|spain|canada|mexico|brazil|india|south-korea|australia|russia|south-africa)-trade-(?:deficit|surplus|balance)-in-\d{4}/i,
+  // 32) Monthly inflation brackets — "argentina-monthly-inflation-may".
+  //     Country-CPI release polling, no `cpi` tag (which has cleaner
+  //     coverage of annual variants). Slug-anchored to side-step false
+  //     positive on `inflation` tag, which also sits on insider-edge
+  //     single-shot events like `costco-increases-hotdog-price-before-2027`.
+  /^[a-z][a-z-]+-monthly-inflation-(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)\b/i,
+  // 33) "How high will inflation get/hit/go/reach in YYYY" macro brackets —
+  //     CPI bracket polling in question shape that lacks `cpi` tag.
+  /^how-high-will-inflation-(?:get|hit|go|reach)-(?:in|by|before)-\d{4}/i,
+  // 34) Fed three-meeting parlay brackets — "fed-decisions-mar-jun" with
+  //     sub-markets "will-the-fed-cutpausepause-in-the-next-three-decisions-
+  //     maraprjun". Same logic as rule 28: Fed path is heavily public-
+  //     modeled via Fed Funds futures. The parlay flavor multiplies the
+  //     bracket dimensionality but the underlying signal is still public.
+  /^fed-decisions-(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)-(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)$/i,
+  // 35) Official-FX exchange rate brackets — "argentina-official-usd-
+  //     exchange-rate-end-of-2026" and `-higher-brackets` variant. Country-
+  //     CB-managed rates (BCRA / Venezuela DICOM / Iran NIMA) polled at
+  //     end-of-period; same logic as rule 23 / 29 but with explicit
+  //     "official" qualifier.
+  /^[a-z][a-z-]+-official-(?:usd|eur|gbp|jpy|cny)-exchange-rate-/i,
 ];
 
 export function isSkippedSlug(slug: string): boolean {
