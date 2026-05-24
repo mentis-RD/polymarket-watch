@@ -226,6 +226,18 @@ const SKIP_SLUG_RES: RegExp[] = [
   /^(?:top|\d+)-spotify-artist-/i,
   /^which-artists-will-have-(?:a-billboard-)?\d+-(?:hits?|songs?|albums?)/i,
   /^will-[a-z-]+-have-the-top-\d+-albums-on-the-billboard/i,
+  // 9) IPO valuation / closing market-cap brackets — "SpaceX IPO closing
+  //    market cap above ___?" "What will SpaceX's IPO valuation be?"
+  //    "How much will SpaceX raise in its IPO?". Same shape as equity
+  //    weekly/monthly price brackets (rule 6/7): bracket polling against
+  //    a future public number. The bankers who actually price the book
+  //    don't bet on Polymarket; everyone else is guessing. Deliberately
+  //    keeps insider-edge IPO markets: timing (`in-which-month-will-X-ipo`,
+  //    `X-ipo-by`), lead bank, exchange choice, corporate-vehicle structure
+  //    (Ackman SPAR), and date races between companies.
+  /-ipo-closing-market-cap(?:-|$)/i,
+  /^what-will-[a-z-]+s?-ipo-valuation-be/i,
+  /^how-much-will-[a-z-]+-raise-in-its-ipo/i,
 ];
 
 export function isSkippedSlug(slug: string): boolean {
