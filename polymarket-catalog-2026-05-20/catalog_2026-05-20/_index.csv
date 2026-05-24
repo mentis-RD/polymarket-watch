@@ -1,12 +1,12 @@
 category,file,events
 politics,politics.csv,1363
-crypto,crypto.csv,170
+crypto,crypto.csv,167
 culture,culture.csv,154
-finance,finance.csv,96
+finance,finance.csv,87
 geopolitics,geopolitics.csv,92
 tech,tech.csv,84
 economy,economy.csv,79
-business,business.csv,69
+business,business.csv,63
 science,science.csv,25
 weather,weather.csv,6
 elections,elections.csv,6
