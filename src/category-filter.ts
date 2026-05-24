@@ -184,6 +184,13 @@ const SKIP_TAG_SLUGS: Set<string> = new Set([
   "top-netflix",
   "box-office",
   "tsa",
+  // GPU rental price brackets (Ornn Index per-GPU-model — H100/H200/B200).
+  // Public Ornn aggregator data, auto-poll factory shape. Same noise as
+  // commodity-hit brackets.
+  "ornn",
+  // Single-event macro-graph tag for `us-recession-by-end-of-2026` style
+  // recession single-shots that lack `gdp` tag.
+  "macro-graph",
 ]);
 
 /**
@@ -443,6 +450,37 @@ const SKIP_SLUG_RES: RegExp[] = [
   //     specific shapes and Polymarket attracts crypto-native bettors
   //     who follow those leak channels.
   /-fdv-above-one-day-after-launch/i,
+  // 40) Recession single-shot binary — "us-recession-by-end-of-2026",
+  //     "uk-recession-in-2026". GDP-defined; same family as `gdp` tag-skip
+  //     for events that ship without it. Backup to tag rule.
+  /^[a-z][a-z-]+-recession-(?:by-end-of|in)-\d{4}/i,
+  // 41) Public-sale total-commitments brackets — "printr-public-sale-
+  //     total-commitments". Auto-poll on dollar amount raised. Doesn't
+  //     tag-skip `public-sales` since that tag also sits on `next-token-
+  //     sale-on-coinbase-by` (date prediction, KEEP per token-launch
+  //     framework).
+  /-public-sale-total-commitments$/i,
+  // 42) AI-generated song chart milestone — "will-another-ai-generated-
+  //     song-reach-number-1-on-any-billboard-chart-by-june-30". Same
+  //     Billboard noise as rule 8 family but in question shape.
+  /-ai-generated-song-(?:reach|hit|chart)/i,
+  // 43) Fed rate count / emergency / dissent / year-end brackets — all
+  //     bracket-on-public-FOMC-outcome. Companion to rule 22 / 28 / 34
+  //     for Fed-related shapes those rules don't anchor. Deliberately
+  //     slug-anchored (not `fed-rates` tag-skip) because that tag also
+  //     covers Powell personnel events (federally-charged, departs-as-
+  //     chair, in-jail-before-2027, Trump-fire-as-board-member) where
+  //     political/Trump-admin leak channels are real.
+  /^how-many-fed-rate-(?:cuts?|hikes?)-in-\d{4}/i,
+  /^fed-emergency-rate-(?:cut|hike|action)-/i,
+  /^how-many-dissent-at-the-next-fed-meeting/i,
+  /^what-will-(?:the-)?fed-rate-(?:be|hit)-/i,
+  /^how-(?:high|low)-will-\d+-year-(?:mortgage-rate|treasury-yield)-(?:go|get)/i,
+  // 44) Aggregate token-sale raise brackets — "how-much-will-coinbase-
+  //     token-sales-raise-in-2026". Different from per-launch `will-X-
+  //     launch-a-token-by` (which has team insider edge); this is platform-
+  //     aggregate dollar-volume macro bracket.
+  /^how-much-will-[a-z][a-z-]+-token-sales?-raise-in-\d{4}/i,
 ];
 
 export function isSkippedSlug(slug: string): boolean {
