@@ -184,17 +184,6 @@ const SKIP_TAG_SLUGS: Set<string> = new Set([
   "top-netflix",
   "box-office",
   "tsa",
-  // Crypto pre-token-launch auto-poll bracket family — tag covers
-  // (a) `<token>-fdv-above-one-day-after-launch` FDV brackets,
-  // (b) `will-<X>-launch-a-token-by-<date>` launch-date predictions,
-  // (c) `<X>-public-sale-total-commitments` raise-size brackets,
-  // (d) `<X>-airdrop-by` airdrop-date predictions,
-  // (e) `<X>-ipo-in-<year>` (e.g. okx-ipo-in-2026) IPO timing.
-  // All Polymarket factory shapes. Pre-launch FDV polls public-rumor
-  // valuations; date predictions are noise per the rule 20 reversal
-  // ("even date-leakable markets are noise because actual insiders
-  // don't bet on Polymarket").
-  "pre-market",
 ]);
 
 /**
@@ -336,15 +325,15 @@ const SKIP_SLUG_RES: RegExp[] = [
   //     but slug-anchored to cover the few that ship without proper futures
   //     tagging. Future-proofed to common commodity siblings.
   /^will-(?:gas|gasoline|crude|brent|wti|natgas|natural-gas|heating-oil|diesel|propane|jet-fuel)-hit-(?:by-|on-|in-)/i,
-  // 20) IPO date-prediction brackets — "spacex-ipo-by", "openai-ipo-by"
-  //     with sub-markets like will-spacex-ipo-by-march-31-2026. Rule 9
-  //     previously KEPT these on the theory that bankers know the schedule
-  //     — user has since clarified that even date-leakable markets are
-  //     noise on Polymarket because actual insiders don't bet here. Only
-  //     reverses the `-ipo-by` shape; `lead-bank-in-X-ipo`, `which-exchange-
-  //     will-X-list-on`, `in-which-month-will-X-ipo` left intact pending
-  //     explicit flag.
-  /^[a-z][a-z-]+-ipo-by$/i,
+  // 20) [REMOVED — was IPO date-prediction `^[a-z]+-ipo-by$` family,
+  //     reverted after the rule-28 / pre-market reversal pass. Token launch
+  //     dates have HIGH asymmetric-info edge in crypto (small teams, no
+  //     regulator disclosure, VC advance notice, leak-prone Crypto Twitter)
+  //     and IPO dates share the same banker/exec/early-investor channel.
+  //     Restored to KEEP. The earlier "actual insiders don't bet here"
+  //     argument applies only to high-status careful actors like Fed
+  //     governors; for crypto and IPO timing the insider class is much
+  //     wider and includes degens who absolutely DO bet on Polymarket.]
   // 21) Commodity hit-by-date brackets in `what-will-X-hit` shape —
   //     "what-will-gold-gc-hit-by-end-of-december". Polled against
   //     CME settlement prices. Some carry tag typos (`comex-gold-features`
@@ -444,6 +433,16 @@ const SKIP_SLUG_RES: RegExp[] = [
   // 38) NFT floor price brackets — "what-floor-price-will-cryptopunks-hit-
   //     before-2027". Public OpenSea/NftPriceFloor data, auto-poll.
   /^what-floor-price-will-[a-z][a-z-]+-hit-(?:before|by|in)-/i,
+  // 39) Post-launch token FDV brackets — "opensea-fdv-above-one-day-after-
+  //     launch" with sub-markets `opensea-fdv-above-1b-one-day-after-launch`.
+  //     Resolves on public DEX/CEX FDV 1 day after launch — bracket on
+  //     a fully-public price/circulation product. Companion to other
+  //     bracket families; the surrounding token-launch ecosystem markets
+  //     (launch-date / airdrop / IPO-by) are deliberately KEPT because
+  //     teams + VCs + early investors have high insider edge on those
+  //     specific shapes and Polymarket attracts crypto-native bettors
+  //     who follow those leak channels.
+  /-fdv-above-one-day-after-launch/i,
 ];
 
 export function isSkippedSlug(slug: string): boolean {
