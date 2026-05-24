@@ -268,6 +268,39 @@ const SKIP_SLUG_RES: RegExp[] = [
   //     earnings beat/miss bets are dominated by Wall Street desks not by
   //     Polymarket wallets.
   /^[a-z]{2,6}-quarterly-earnings-(?:non)?gaap-eps-\d/i,
+  // 14) Private-company NPM valuation hit-by-date brackets — "will-anthropics-
+  //     valuation-hit-by-june-30", sub-markets like will-anthropics-valuation-
+  //     hit-high-925b-by-june-30. Polled against the public Nasdaq Private
+  //     Market (NPM) Price; same bracket shape as IPO closing market cap
+  //     (rule 9), just for ongoing private rounds. Polymarket auto-creates
+  //     for the entire private-tech universe.
+  /^will-[a-z][a-z-]+-valuation-hit-by-/i,
+  // 15) Cross-company "higher valuation on <date>" comparisons — "anthropic-
+  //     vs-openai-higher-valuation-on-june-30", "anthropic-openai-vs-meta-...".
+  //     Same NPM-bracket shape as rule 14, just paired.
+  /-vs-[a-z][a-z-]+-higher-valuation-on-/i,
+  // 16) "Nth largest private company end-of-<month>" rankings — auto-poll
+  //     across the NPM universe, same data source as rule 14.
+  /^(?:\d+(?:st|nd|rd|th)-)?largest-private-company-end-of-/i,
+  // 17) Index hit-by-month brackets — "spx-hit-jun-2026" with sub-markets
+  //     "spx-hit-7450-high-jun-2026-..." and "will-sp-500-spx-hit-N-high-in-
+  //     june". Monthly index target polling, same shape as equity weekly
+  //     brackets (rule 6/12) one tier up. Future-proofed to sibling US
+  //     indices (NDX/Russell/DJI) since Polymarket runs the same poll for
+  //     each.
+  /^(?:spx|sp-?500|ndx|nasdaq|russell-?2000|rut|dji|dow)-hit-(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)-\d{4}/i,
+  // 18) Quarterly metric brackets — "will-take-two-q4-net-bookings-be-above",
+  //     "will-workday-q1-total-subscription-revenue-backlog-be-above",
+  //     "will-broadcom-q2-ai-revenue-be-above". Per-segment quarterly metric
+  //     polling against street estimates; same shape as rule 13 (EPS) but
+  //     for revenue / ARR / bookings / backlog subsets that management knows
+  //     but Polymarket auto-creates uniformly across the Street universe.
+  /^will-[a-z][a-z-]+-q[1-4]-[a-z0-9-]+-be-(?:above|below)/i,
+  // 19) Commodity hit-by-date brackets — "will-gas-hit-by-end-of-may".
+  //     Same shape as the NYMEX/COMEX tag-filtered family in SKIP_TAG_SLUGS
+  //     but slug-anchored to cover the few that ship without proper futures
+  //     tagging. Future-proofed to common commodity siblings.
+  /^will-(?:gas|gasoline|crude|brent|wti|natgas|natural-gas|heating-oil|diesel|propane|jet-fuel)-hit-(?:by-|on-|in-)/i,
 ];
 
 export function isSkippedSlug(slug: string): boolean {
