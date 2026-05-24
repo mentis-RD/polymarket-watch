@@ -249,6 +249,25 @@ const SKIP_SLUG_RES: RegExp[] = [
   //     number; same family as rule 10 (equity close brackets). Prime-broker
   //     flow data leaks early but those desks don't bet on Polymarket.
   /^(?:bitcoin|ethereum|btc|eth)-etf-flows-on-/i,
+  // 12) Weekly equity close brackets — sibling shapes of rule 6/10. Event
+  //     slugs come in two flavors that the existing rules miss:
+  //       `<ticker>-week-<month>-<day>-<year>`  ("aapl-week-may-22-2026",
+  //         sub-markets like will-aapl-close-between-N-and-M-week-...)
+  //       `<ticker>-above-on-<month>-<day>-<year>`  ("aapl-above-on-may-22-2026",
+  //         sub-markets like aapl-above-N-on-...)
+  //     Both poll Friday close against bracket levels — same noise shape as
+  //     rule 6 (will-X-hit-week-of-...) and rule 10 (X-close-above-on-...).
+  /^[a-z]{2,6}-(?:week|above-on)-(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)-\d+/i,
+  // 13) Quarterly earnings EPS brackets — "<ticker>-quarterly-earnings-
+  //     [non]gaap-eps-<date>-<strike>", e.g. nvda-quarterly-earnings-nongaap-
+  //     eps-05-20-2026-1pt77. Polymarket auto-creates these for the entire
+  //     Street-covered universe (incl. BJ's Wholesale / Williams-Sonoma /
+  //     Frontline) — same bracket-on-public-number shape as price brackets.
+  //     Yes, management knows EPS before release, but slug is identical for
+  //     NVDA and for obscure tickers and we can't pattern-discriminate, and
+  //     earnings beat/miss bets are dominated by Wall Street desks not by
+  //     Polymarket wallets.
+  /^[a-z]{2,6}-quarterly-earnings-(?:non)?gaap-eps-\d/i,
 ];
 
 export function isSkippedSlug(slug: string): boolean {
