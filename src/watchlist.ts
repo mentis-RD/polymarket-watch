@@ -28,7 +28,7 @@ export interface SubMarket {
  */
 export interface WatchEntry {
   added_at: number;
-  added_by: "manual" | "smart_money_signal";
+  added_by: "manual" | "smart_money_signal" | "bulk_import";
   risk_tag: RiskTag;
   reason: string;
   event_slug: string;

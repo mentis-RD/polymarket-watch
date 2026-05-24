@@ -227,14 +227,28 @@ async function globalPollLoop(): Promise<void> {
 }
 
 log("trade-enricher", "starting");
-// Both loops are essential — if either crashes, exit the whole process so
+// watchlist loop is essential — if it crashes, exit the whole process so
 // pm2 restarts and watchdog/heartbeat catches any longer outage.
 const watchlistLoop = pollLoop().catch((e) => {
   err("trade-enricher", "watchlist loop fatal", e);
   process.exit(1);
 });
-const globalLoop = globalPollLoop().catch((e) => {
-  err("trade-enricher", "global loop fatal", e);
-  process.exit(1);
-});
-void Promise.all([watchlistLoop, globalLoop]);
+
+// Global smart-money cross-link loop — gated behind env flag. Disabled
+// by default after the catalog bulk-load: pulling 500 recent trades every
+// 30s + per-wallet alchemy profile lookups on every smart-money trade
+// on non-watchlist markets burns alchemy credits without proportionate
+// signal value. Re-enable by setting SMART_MONEY_CROSS_LINK_ENABLED=true
+// in .env if/when alert noise is acceptable again.
+const SMART_MONEY_ENABLED = process.env.SMART_MONEY_CROSS_LINK_ENABLED === "true";
+if (SMART_MONEY_ENABLED) {
+  log("trade-enricher", "smart-money cross-link ENABLED");
+  const globalLoop = globalPollLoop().catch((e) => {
+    err("trade-enricher", "global loop fatal", e);
+    process.exit(1);
+  });
+  void Promise.all([watchlistLoop, globalLoop]);
+} else {
+  log("trade-enricher", "smart-money cross-link DISABLED (set SMART_MONEY_CROSS_LINK_ENABLED=true to re-enable)");
+  void watchlistLoop;
+}
