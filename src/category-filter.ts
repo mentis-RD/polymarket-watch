@@ -244,6 +244,11 @@ const SKIP_SLUG_RES: RegExp[] = [
   //     `daily|equities|stocks|hide-from-new` but we slug-filter to avoid
   //     killing genuine equity-news events that also carry `equities`/`stocks`.
   /^[a-z]{2,6}-close-(?:above|below)-on-[a-z]+-\d+/i,
+  // 11) Daily ETF flow brackets — "bitcoin-etf-flows-on-may-20",
+  //     "ethereum-etf-flows-on-may-21". Per-day bracket on a public flows
+  //     number; same family as rule 10 (equity close brackets). Prime-broker
+  //     flow data leaks early but those desks don't bet on Polymarket.
+  /^(?:bitcoin|ethereum|btc|eth)-etf-flows-on-/i,
 ];
 
 export function isSkippedSlug(slug: string): boolean {
