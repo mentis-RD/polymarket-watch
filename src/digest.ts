@@ -64,7 +64,7 @@ function loadNewEventsSince(sinceTs: number): NewEventRecord[] {
       // events were written (curation iteration) wouldn't retroactively
       // skip stale records. This catches them at digest time so the
       // 12:00 send is always against current filter state.
-      const tags = (r.tags || "").split("|").filter(Boolean).map((label) => ({ label }));
+      const tags = (r.tags || "").split("|").filter(Boolean).map((label) => ({ id: "", label, slug: "" }));
       if (isSkippedCategoryEvent(tags, r.event_slug)) { filtered++; continue; }
       out.push(r);
     } catch {

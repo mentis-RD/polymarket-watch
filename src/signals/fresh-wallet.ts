@@ -2,6 +2,7 @@ import type { PolyTrade } from "../clob-rest.js";
 import { getProfile, type WalletProfile } from "../wallet-profiler.js";
 import { canAlert, markAlerted } from "../alert-cooldown.js";
 import { sendMessage } from "../telegram.js";
+import { eventLink, walletLink, fmtMoney, sideLabel, shortDate } from "../alert-format.js";
 import { escapeMd } from "../markdown.js";
 import { log } from "../log.js";
 
@@ -153,10 +154,7 @@ async function fireAlert(
   const thread = process.env.TG_THREAD_FRESH;
   if (!chat) return;
 
-  const endShort = meta.end_date ? meta.end_date.slice(0, 10) : "";
-  const dominantOutcome = dominantIdx === 0 ? "YES" : "NO";
-  const notional = `$${Math.round(net).toLocaleString("en-US")}`;
-  const shortAddr = `${profile.wallet.slice(0, 6)}…${profile.wallet.slice(-4)}`;
+  const endTxt = meta.end_date ? ` · ends ${shortDate(meta.end_date)}` : "";
   const ageTxt =
     profile.age_days === null
       ? "no $1k+ USDC inflow on record"
@@ -169,21 +167,13 @@ async function fireAlert(
     ? "🚨 *Fresh wallet — hidden funding*"
     : "🚨 *Fresh wallet*";
 
-  // Title links to polymarket event page; wallet links to polygonscan.
-  // Compact 3-block layout: header / market+activity / wallet+funding.
-  const titleLink = `[${escapeMd(meta.event_title || meta.event_slug)}](https://polymarket.com/event/${meta.event_slug})`;
-  const walletLink = `[${shortAddr}](https://polygonscan.com/address/${profile.wallet})`;
-
-  const activityLineParts = [`${notional} *${dominantOutcome}* @${trade.price.toFixed(2)}${subDetail}`];
-  if (endShort) activityLineParts.push(`ends ${endShort}`);
-
   const text = [
     header,
     "",
-    titleLink,
-    activityLineParts.join(" · "),
+    eventLink(meta.event_slug, escapeMd(meta.event_title || meta.event_slug)),
+    `${fmtMoney(net)} ${sideLabel(dominantIdx)} @${trade.price.toFixed(2)}${subDetail}${endTxt}`,
     "",
-    `${walletLink} · score ${profile.score}/10`,
+    `${walletLink(profile.wallet)} · score ${profile.score}/10`,
     ageTxt,
   ].join("\n");
 

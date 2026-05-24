@@ -2,6 +2,7 @@ import { getProfile, type WalletProfile } from "../wallet-profiler.js";
 import { canAlert, markAlerted } from "../alert-cooldown.js";
 import { sendMessage } from "../telegram.js";
 import { escapeMd } from "../markdown.js";
+import { eventLink, walletLink, fmtMoney, sideLabel, shortDate } from "../alert-format.js";
 import { log } from "../log.js";
 import { categoryBucket, type FundingCategory } from "../funding-source.js";
 import { getForEvent } from "../enriched-store.js";
@@ -298,19 +299,17 @@ async function fireAlert(meta: MarketMeta, info: AlertInfo): Promise<void> {
   const thread = process.env.TG_THREAD_CLUSTER;
   if (!chat) return;
 
-  const wallets = info.cluster.map((w) => `\`${w.slice(0, 6)}…${w.slice(-4)}\``).join(", ");
+  const wallets = info.cluster.map((w) => walletLink(w)).join(" · ");
+  const endTxt = meta.end_date ? ` · ends ${shortDate(meta.end_date)}` : "";
   const text = [
-    `🚨 *Coordinated cluster* — \`${escapeMd(meta.slug)}\``,
-    `_${escapeMd(meta.question)}_`,
-    `cluster: ${info.cluster.length} wallets on ${info.dominantSide === 0 ? "Yes" : "No"}`,
-    `${wallets}`,
-    `total notional: $${info.totalNotional.toFixed(0)}`,
-    `strongest pair score=${info.maxPair.score.toFixed(2)} (${escapeMd(info.maxPair.factors.join(", "))})`,
-    meta.end_date ? `⏳ ends ${meta.end_date.slice(0, 10)}` : null,
-    `https://polymarket.com/event/${meta.slug}`,
-  ]
-    .filter((x) => x)
-    .join("\n");
+    `🚨 *Coordinated cluster · ${info.cluster.length} wallets · ${sideLabel(info.dominantSide)}*`,
+    "",
+    eventLink(meta.slug, escapeMd(meta.question)),
+    `${fmtMoney(info.totalNotional)} total${endTxt}`,
+    "",
+    wallets,
+    `strongest pair ${info.maxPair.score.toFixed(2)} (${escapeMd(info.maxPair.factors.join(", "))})`,
+  ].join("\n");
 
   await sendMessage({
     chatId: chat,

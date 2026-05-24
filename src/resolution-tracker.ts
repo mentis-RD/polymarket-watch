@@ -9,6 +9,7 @@ import * as watchlist from "./watchlist.js";
 import * as smartMoney from "./smart-money-db.js";
 import { fetchMarketBySlug } from "./polymarket-api.js";
 import { sendMessage } from "./telegram.js";
+import { marketLink, walletLink, fmtMoney } from "./alert-format.js";
 import { heartbeat } from "./heartbeat.js";
 import { writeJsonAtomic } from "./atomic-write.js";
 import { escapeMd } from "./markdown.js";
@@ -241,20 +242,18 @@ async function sendRecap(
   if (!chat) return;
 
   const top = winners.slice(0, 10).map((w) => {
-    const short = w.wallet.slice(0, 6) + "…" + w.wallet.slice(-4);
-    return `• \`${short}\` ${w.multiple.toFixed(1)}× ($${w.notional_invested.toFixed(0)} @${w.avg_bought_price.toFixed(2)})`;
+    return `• ${walletLink(w.wallet)} ${w.multiple.toFixed(1)}× · ${fmtMoney(w.notional_invested)} @${w.avg_bought_price.toFixed(2)}`;
   });
 
   const text = [
-    `📊 *Resolution* — \`${escapeMd(slug)}\` → *${escapeMd(outcome)}*`,
-    `_${escapeMd(question)}_`,
+    `📊 *Resolution → ${escapeMd(outcome).toUpperCase()}*`,
     "",
+    marketLink(slug, escapeMd(question)),
     winners.length > 0
-      ? `*Early winners (bought < ${WIN_PRICE_THRESHOLD}, held through, >$${MIN_NOTIONAL}):* ${winners.length}`
+      ? `${winners.length} early winners (bought <${WIN_PRICE_THRESHOLD}, held through, >${fmtMoney(MIN_NOTIONAL)})`
       : "_no early winners on our enriched data_",
-    ...top,
     "",
-    `https://polymarket.com/market/${slug}`,
+    ...top,
   ].join("\n");
 
   await sendMessage({

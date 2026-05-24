@@ -1,6 +1,7 @@
 import { canAlert, markAlerted } from "../alert-cooldown.js";
 import { sendMessage } from "../telegram.js";
 import { escapeMd } from "../markdown.js";
+import { walletLink, marketLink, fmtMoney, sideLabel } from "../alert-format.js";
 import { log } from "../log.js";
 import { getRecent, type EnrichedTrade } from "../enriched-store.js";
 
@@ -206,19 +207,19 @@ async function fireAlert(wallet: string, cluster: MarketBet[]): Promise<void> {
   const cooldownKey = `xmarket:${wallet}:${core}`;
   if (!canAlert(cooldownKey, COOLDOWN_MS)) return;
 
+  const kwTxt = shared.map((k) => `\`${escapeMd(k)}\``).join(", ") || "—";
   const lines = [
-    `🚨 *Cross-market correlation* — wallet \`${wallet.slice(0, 6)}…${wallet.slice(-4)}\``,
-    `${cluster.length} related markets, keywords: ${shared.map((k) => `\`${escapeMd(k)}\``).join(", ") || "—"}`,
-    `dominant side: ${dom.side === 0 ? "Yes" : "No"} (${Math.round(dom.ratio * 100)}%), total ≈ $${dom.notional.toFixed(0)}`,
+    `🚨 *Cross-market correlation · ${cluster.length} markets · ${sideLabel(dom.side as 0 | 1)} ${Math.round(dom.ratio * 100)}%*`,
+    "",
+    `${walletLink(wallet)} · ${fmtMoney(dom.notional)} total`,
+    `keywords: ${kwTxt}`,
     "",
     ...cluster.slice(0, 8).map((b) => {
       const net = b.net_outcome0_notional - b.net_outcome1_notional;
-      const dir = net >= 0 ? "Y" : "N";
-      const amt = Math.abs(net).toFixed(0);
-      return `• \`${escapeMd(b.slug)}\` ${dir} $${amt}`;
+      const dir = net >= 0 ? "YES" : "NO";
+      const amt = fmtMoney(Math.abs(net));
+      return `• ${marketLink(b.slug, `\`${escapeMd(b.slug)}\``)} *${dir}* ${amt}`;
     }),
-    "",
-    `https://polygonscan.com/address/${wallet}`,
   ].join("\n");
 
   await sendMessage({

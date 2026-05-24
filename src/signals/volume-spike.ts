@@ -2,6 +2,7 @@ import type { TradeEvent } from "../clob-ws.js";
 import { canAlert, markAlerted } from "../alert-cooldown.js";
 import { sendMessage } from "../telegram.js";
 import { escapeMd } from "../markdown.js";
+import { marketLink, fmtMoneyShort, shortDate } from "../alert-format.js";
 import { log } from "../log.js";
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -131,18 +132,18 @@ export class VolumeSpikeDetector {
     if (!chat) return;
 
     const sideTxt = info.oneSided
-      ? ` (${Math.round(info.sideRatio * 100)}% ${info.dominantSide})`
+      ? ` · ${Math.round(info.sideRatio * 100)}% *${info.dominantSide.toUpperCase()}*`
       : "";
+    const titleLink = meta
+      ? marketLink(slug, escapeMd(meta.question))
+      : marketLink(slug, `\`${escapeMd(slug)}\``);
+    const endTxt = meta?.end_date ? ` · ends ${shortDate(meta.end_date)}` : "";
     const text = [
-      `🚨 *Volume spike* — \`${escapeMd(slug)}\``,
-      meta ? `_${escapeMd(meta.question)}_` : null,
-      `${info.multiple.toFixed(1)}× baseline${sideTxt}`,
-      `current\\_hr=${info.curVol.toFixed(0)}  baseline=${info.baseline.toFixed(0)}/hr`,
-      meta?.end_date ? `⏳ ends ${meta.end_date.slice(0, 10)}` : null,
-      `https://polymarket.com/market/${slug}`,
-    ]
-      .filter((x) => x)
-      .join("\n");
+      `🚨 *Volume spike · ${info.multiple.toFixed(1)}×*`,
+      "",
+      titleLink,
+      `${fmtMoneyShort(info.curVol)}/hr${sideTxt} · baseline ${fmtMoneyShort(info.baseline)}/hr${endTxt}`,
+    ].join("\n");
 
     await sendMessage({
       chatId: chat,

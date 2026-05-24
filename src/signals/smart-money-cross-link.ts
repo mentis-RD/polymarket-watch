@@ -6,6 +6,7 @@ import * as smartMoney from "../smart-money-db.js";
 import * as watchlist from "../watchlist.js";
 import { canAlert, markAlerted } from "../alert-cooldown.js";
 import { sendMessage } from "../telegram.js";
+import { marketLink, walletLink, fmtMoney } from "../alert-format.js";
 import { writeJsonAtomic } from "../atomic-write.js";
 import { escapeMd } from "../markdown.js";
 import { log } from "../log.js";
@@ -89,26 +90,27 @@ async function fireAlert(trade: PolyTrade, entry: smartMoney.SmartMoneyEntry): P
   if (!chat) return;
 
   const wallet = trade.proxyWallet.toLowerCase();
-  const label = entry.pseudonym
-    ? `${escapeMd(entry.pseudonym)} (\`${wallet.slice(0, 6)}…${wallet.slice(-4)}\`)`
-    : `\`${wallet}\``;
+  const walletLbl = entry.pseudonym
+    ? `*${escapeMd(entry.pseudonym)}* (${walletLink(wallet)})`
+    : walletLink(wallet);
   const notional = trade.size * trade.price;
-  const seedAmt = entry.seed_amount
-    ? ` lifetime ${escapeMd(entry.added_by.replace("leaderboard_", ""))}: $${entry.seed_amount.toFixed(0)}`
+  const seedTxt = entry.seed_amount
+    ? ` · lifetime ${escapeMd(entry.added_by.replace("leaderboard_", ""))} ${fmtMoney(entry.seed_amount)}`
     : "";
-  const wins = entry.wins.length > 0 ? `, ${entry.wins.length} prior post-mortem wins` : "";
+  const winsTxt = entry.wins.length > 0 ? ` · ${entry.wins.length} prior wins` : "";
+  const titleLink = trade.title
+    ? marketLink(trade.slug, escapeMd(trade.title))
+    : marketLink(trade.slug, `\`${escapeMd(trade.slug)}\``);
 
   const text = [
-    `⭐ *Smart money* — \`${escapeMd(trade.slug)}\` *(non-watchlist)*`,
-    trade.title ? `_${escapeMd(trade.title)}_` : null,
-    `${label}${seedAmt}${wins}`,
-    `${trade.side} ${escapeMd(trade.outcome)}  $${notional.toFixed(0)} @${trade.price.toFixed(2)}`,
-    `https://polymarket.com/market/${trade.slug}`,
-    `https://polygonscan.com/address/${wallet}`,
-    `_consider /watch ${escapeMd(trade.slug)}_`,
-  ]
-    .filter((x) => x)
-    .join("\n");
+    "⭐ *Smart money · non-watchlist*",
+    "",
+    titleLink,
+    `${trade.side} *${escapeMd(trade.outcome).toUpperCase()}* ${fmtMoney(notional)} @${trade.price.toFixed(2)}`,
+    "",
+    `${walletLbl}${seedTxt}${winsTxt}`,
+    `→ \`/watch ${escapeMd(trade.slug)}\``,
+  ].join("\n");
 
   await sendMessage({
     chatId: chat,
