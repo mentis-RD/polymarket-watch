@@ -238,6 +238,12 @@ const SKIP_SLUG_RES: RegExp[] = [
   /-ipo-closing-market-cap(?:-|$)/i,
   /^what-will-[a-z-]+s?-ipo-valuation-be/i,
   /^how-much-will-[a-z-]+-raise-in-its-ipo/i,
+  // 10) Daily equity close-above/below brackets — "aapl-close-above-on-may-20-2026",
+  //     "tsla-close-below-on-may-21-2026". Per-day binary on a public closing
+  //     price; daily tick of the weekly bracket family from rule 6. Tagged
+  //     `daily|equities|stocks|hide-from-new` but we slug-filter to avoid
+  //     killing genuine equity-news events that also carry `equities`/`stocks`.
+  /^[a-z]{2,6}-close-(?:above|below)-on-[a-z]+-\d+/i,
 ];
 
 export function isSkippedSlug(slug: string): boolean {
