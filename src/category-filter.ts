@@ -184,6 +184,17 @@ const SKIP_TAG_SLUGS: Set<string> = new Set([
   "top-netflix",
   "box-office",
   "tsa",
+  // Crypto pre-token-launch auto-poll bracket family — tag covers
+  // (a) `<token>-fdv-above-one-day-after-launch` FDV brackets,
+  // (b) `will-<X>-launch-a-token-by-<date>` launch-date predictions,
+  // (c) `<X>-public-sale-total-commitments` raise-size brackets,
+  // (d) `<X>-airdrop-by` airdrop-date predictions,
+  // (e) `<X>-ipo-in-<year>` (e.g. okx-ipo-in-2026) IPO timing.
+  // All Polymarket factory shapes. Pre-launch FDV polls public-rumor
+  // valuations; date predictions are noise per the rule 20 reversal
+  // ("even date-leakable markets are noise because actual insiders
+  // don't bet on Polymarket").
+  "pre-market",
 ]);
 
 /**
@@ -421,6 +432,18 @@ const SKIP_SLUG_RES: RegExp[] = [
   //     get-married-by-december-31, who-will-trump-meet-with-in-2026,
   //     democratic-presidential-nominee-2028 all carry the tag).
   /mrbeast.*(?:views?|subscribers?)|(?:views?|subscribers?).*mrbeast/i,
+  // 37) Single-shot crypto macro brackets — bracket on a public on-chain
+  //     or aggregator metric. CoinGecko/DefiLlama/CoinMarketCap/Artemis
+  //     data. No Polymarket-side insider edge.
+  /^will-(?:bitcoin|btc|ethereum|eth|solana|sol)-(?:outperform|underperform)-/i,
+  /^will-(?:bitcoin|btc|ethereum|eth)-dominance-(?:hit|fall|exceed|reach|drop)/i,
+  /^will-stablecoins?-(?:hit|exceed|reach|fall|drop)/i,
+  /-stablecoin-(?:market-share|supply|circulation)-(?:fall|hit|exceed|reach|drop)/i,
+  /^will-[a-z][a-z-]+-buybacks?-(?:hit|exceed|reach)-/i,
+  /^(?:eth|ethereum|btc|bitcoin|sol|solana)-flipped-in-\d{4}/i,
+  // 38) NFT floor price brackets — "what-floor-price-will-cryptopunks-hit-
+  //     before-2027". Public OpenSea/NftPriceFloor data, auto-poll.
+  /^what-floor-price-will-[a-z][a-z-]+-hit-(?:before|by|in)-/i,
 ];
 
 export function isSkippedSlug(slug: string): boolean {
