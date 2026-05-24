@@ -191,6 +191,16 @@ const SKIP_TAG_SLUGS: Set<string> = new Set([
   // Single-event macro-graph tag for `us-recession-by-end-of-2026` style
   // recession single-shots that lack `gdp` tag.
   "macro-graph",
+  // Index daily up/down binary brackets — "spx-up-or-down-on-may-22-2026",
+  // "nik-up-or-down-on-...", DJIA/FTSE/DAX/Hang Seng/Russell/NYA. Pure
+  // public-close vs prior-close binary; clean noise tag.
+  "up-or-down",
+  // `daily-close` tag — overlaps `up-or-down` for index dailies, plus
+  // catches future daily-close-bracket families.
+  "daily-close",
+  // Trump/Warsh/Powell "what will X say/mention" categorical word-list
+  // brackets. The tag marks Polymarket's word-mention factory shape.
+  "mentions",
 ]);
 
 /**
@@ -494,6 +504,12 @@ const SKIP_SLUG_RES: RegExp[] = [
   //     `what-will-trump-announce-as-next-X` admin-decision events.
   /^what-(?:will-)?trump-(?:say|post|tweet|mention|do)-/i,
   /^what-(?:animals|trump-named-things|colors|words|topics)-(?:will-)?trump-/i,
+  // Generalized any-person speech-during-event categorical — covers
+  // "what-will-kevin-warsh-say-during-his-swearing-in",
+  // "what-will-powell-say-at-jackson-hole" and similar. Anchored to
+  // require a date/event-tied suffix so we don't over-match generic
+  // "what will X say" questions that could be policy single-shots.
+  /^what-will-[a-z][a-z-]+-(?:say|post|tweet|mention|do)-(?:during|at|this-week|in-(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)|on-(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december))/i,
   // 47) "Who will Trump publicly insult/praise/meet-with/speak-to" weekly+
   //     monthly auto-poll. Anchored to month-name or this-week so single-
   //     shot annual variants survive (e.g. who-will-trump-meet-with-in-

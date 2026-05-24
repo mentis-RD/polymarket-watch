@@ -9,6 +9,7 @@ import { sendDocument, sendMessage } from "./telegram.js";
 import { heartbeat } from "./heartbeat.js";
 import { writeJsonAtomic } from "./atomic-write.js";
 import { log, err } from "./log.js";
+import { isSkippedCategoryEvent } from "./category-filter.js";
 import type { NewEventRecord } from "./event-discovery.js";
 
 const STATE_DIR = join(process.cwd(), "state");
@@ -53,14 +54,24 @@ function loadNewEventsSince(sinceTs: number): NewEventRecord[] {
   if (!existsSync(NEW_LOG_PATH)) return [];
   const lines = readFileSync(NEW_LOG_PATH, "utf-8").split("\n").filter((l) => l.trim());
   const out: NewEventRecord[] = [];
+  let filtered = 0;
   for (const line of lines) {
     try {
       const r = JSON.parse(line) as NewEventRecord;
-      if (r.ts >= sinceTs) out.push(r);
+      if (r.ts < sinceTs) continue;
+      // Defense-in-depth: re-apply category filter at digest read time.
+      // event-discovery applies it at WRITE time, but rules added after
+      // events were written (curation iteration) wouldn't retroactively
+      // skip stale records. This catches them at digest time so the
+      // 12:00 send is always against current filter state.
+      const tags = (r.tags || "").split("|").filter(Boolean).map((label) => ({ label }));
+      if (isSkippedCategoryEvent(tags, r.event_slug)) { filtered++; continue; }
+      out.push(r);
     } catch {
       // skip malformed line
     }
   }
+  if (filtered > 0) log("digest", `filter re-applied: ${filtered} stale records skipped at read time`);
   return out;
 }
 
