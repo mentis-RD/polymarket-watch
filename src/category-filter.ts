@@ -301,6 +301,48 @@ const SKIP_SLUG_RES: RegExp[] = [
   //     but slug-anchored to cover the few that ship without proper futures
   //     tagging. Future-proofed to common commodity siblings.
   /^will-(?:gas|gasoline|crude|brent|wti|natgas|natural-gas|heating-oil|diesel|propane|jet-fuel)-hit-(?:by-|on-|in-)/i,
+  // 20) IPO date-prediction brackets — "spacex-ipo-by", "openai-ipo-by"
+  //     with sub-markets like will-spacex-ipo-by-march-31-2026. Rule 9
+  //     previously KEPT these on the theory that bankers know the schedule
+  //     — user has since clarified that even date-leakable markets are
+  //     noise on Polymarket because actual insiders don't bet here. Only
+  //     reverses the `-ipo-by` shape; `lead-bank-in-X-ipo`, `which-exchange-
+  //     will-X-list-on`, `in-which-month-will-X-ipo` left intact pending
+  //     explicit flag.
+  /^[a-z][a-z-]+-ipo-by$/i,
+  // 21) Commodity hit-by-date brackets in `what-will-X-hit` shape —
+  //     "what-will-gold-gc-hit-by-end-of-december". Polled against
+  //     CME settlement prices. Some carry tag typos (`comex-gold-features`
+  //     vs `-futures`) that bypass our SKIP_TAG_SLUGS tag-filter, so we
+  //     slug-anchor here too. Companion to rule 19 (`will-gas-hit-by-...`).
+  /^what-will-(?:gold|silver|copper|platinum|palladium|crude|wti|brent|natgas|natural-gas|heating-oil|gasoline|gas|rbob|diesel|propane|jet-fuel|corn|wheat|soybeans|cocoa|coffee|sugar|cotton)(?:-[a-z]{2,4})?-hit-(?:by-|on-|in-)/i,
+  // 22) Interest rate / treasury yield / Fed rate brackets — "will-the-
+  //     30-year-mortgage-rate-hit-in-2026", "how-high-will-10-year-
+  //     treasury-yield-go-before-2027", "fed-rate-hike-in-2026", "fed-rate-
+  //     cut-by-629", "fed-rate-hike-by". Freddie Mac PMMS / Treasury market
+  //     / FOMC are all public, well-modeled by macro desks — bracket-on-
+  //     public-number with no Polymarket-side insider edge.
+  /^will-the-\d+-year-(?:mortgage-rate|treasury-yield|fixed-rate-mortgage)-hit-/i,
+  /^how-high-will-\d+-year-(?:mortgage-rate|treasury-yield)-go/i,
+  /^fed-rate-(?:hike|cut)-(?:by|in)(?:-|$)/i,
+  // 23) FX pair brackets — "will-eurusd-hit-in-2026", usdjpy/gbpusd/usdkrw/
+  //     usdcad/etc. Investing.com hourly candle data, auto-poll across the
+  //     major FX matrix. Enum'd to actual currency codes (not generic
+  //     6-letter regex) to avoid matching random non-FX tokens.
+  /^will-(?:eur|usd|gbp|jpy|chf|cad|aud|nzd|cny|krw|try|mxn|brl|inr|zar|sgd|hkd|thb|cnh|sek|nok|dkk|pln|huf|czk|rub|ils|aed|sar|twd|myr|idr|php|vnd){2}-hit-/i,
+  // 24) "X-valued-higher-than-Y" valuation comparison — variant of rule 15
+  //     (which catches the `-vs-X-higher-valuation-on-` shape). Same NPM-
+  //     bracket cross-company comparison, different slug phrasing.
+  /-valued-higher-than-/i,
+  // 25) Index monthly close brackets — "spx-close-dec-2026" with sub-markets
+  //     spx-close-7000-7500-dec-2026. Companion to rule 17 (`spx-hit-...`)
+  //     which catches the "any-time during month" shape; this catches the
+  //     "month-end close" shape.
+  /^(?:spx|sp-?500|ndx|nasdaq|russell-?2000|rut|dji|dow)-close-(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)-\d{4}/i,
+  // 26) Annual capex brackets — "amazon-2026-capex-above". Same shape as
+  //     rule 18 (quarterly metric brackets) but annual aggregate. Auto-poll
+  //     across the hyperscaler / mega-cap capex universe.
+  /^[a-z][a-z-]+-\d{4}-capex-(?:above|below)/i,
 ];
 
 export function isSkippedSlug(slug: string): boolean {
