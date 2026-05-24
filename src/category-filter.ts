@@ -160,6 +160,18 @@ const SKIP_TAG_SLUGS: Set<string> = new Set([
   "comex-copper-futures",
   "comex-platinum-futures",
   "comex-palladium-futures",
+  // Macro release brackets — CPI / inflation per country, GDP per country,
+  // unemployment polls, Parcl Labs median home values. Each tag is a clean
+  // umbrella for auto-poll brackets on a single public statistical release;
+  // BLS/BEA/Eurostat/INEGI/etc don't bet on Polymarket and consensus is
+  // already-priced by macro desks. Note `global-rates` is NOT here despite
+  // similar logic — that tag also sits on personnel events like Lagarde-
+  // out-as-ECB-president; we slug-filter the CB decision shape instead
+  // (see rule 28) to spare those.
+  "cpi",
+  "gdp",
+  "parcl",
+  "unemployment",
 ]);
 
 /**
@@ -343,6 +355,31 @@ const SKIP_SLUG_RES: RegExp[] = [
   //     rule 18 (quarterly metric brackets) but annual aggregate. Auto-poll
   //     across the hyperscaler / mega-cap capex universe.
   /^[a-z][a-z-]+-\d{4}-capex-(?:above|below)/i,
+  // 27) Parcl median home value brackets — backup for the `parcl` tag-skip.
+  //     "what-will-the-median-home-value-in-miami-be-on-may-31". Per-city
+  //     polling against Parcl Labs Sales Price index.
+  /^what-will-the-median-home-value-in-/i,
+  // 28) Central bank decision brackets — auto-poll across the global CB
+  //     calendar (BoE/BoR/BoJ/BoC/BoK/ECB/PBoC/RBA/RBNZ/Banxico/SARB/BoI/
+  //     Bank of Israel/Brazil/Colombia, etc.). Decisions are heavily
+  //     public-modeled (Fed Funds futures, OIS curves, Bloomberg WIRP);
+  //     leaks are press-side (FT/Reuters/Nikkei), not Polymarket-side.
+  //     Slug-anchored (not tag-skip on `global-rates`) so personnel events
+  //     like `christine-lagarde-out-as-ecb-president-in-2026` that share
+  //     the tag survive.
+  /-decision-in-(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i,
+  /^[a-z][a-z-]+-rate-(?:hike|cut|change)-in-(?:\d{4}|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i,
+  /-interest-rates?-[a-z]+-\d{4}/i,
+  // 29) Exotic-currency FX brackets — "will-usd-hit-iranian-rials-by-may-31"
+  //     and similar against non-major currencies outside rule 23's ISO-code
+  //     enum (Iran rials, Venezuela bolivars, Argentina pesos, etc.).
+  /^will-(?:usd|eur|gbp|jpy)-(?:hit|reach|fall-to|drop-to|rise-to)-[a-z0-9-]+-(?:rials?|peso|pesos|lira|naira|won|yen|ruble|hryvnia|riyal|dinar|dirham|dong|rupiah|tenge|som|bolivar|kwacha|shilling|colones|guarani|sol|escudo|kip|kyat|cedi|tugrik|afghani|taka)-(?:by|on|in)-/i,
+  // 30) Commodity production brackets — "will-venezuelan-crude-oil-production-
+  //     reach-barrels-per-day-in-2026". OPEC/IEA monthly reports, public.
+  /-(?:crude-oil|natural-gas|coal|copper|iron-ore|lithium|nickel)-production-(?:reach|hit|be-above|be-below)-/i,
+  // 31) Trade deficit/surplus brackets — "us-trade-deficit-in-2026". BEA /
+  //     national-statistics-agency release, bracket on public number.
+  /^(?:us|china|eurozone|uk|japan|germany|france|italy|spain|canada|mexico|brazil|india|south-korea|australia|russia|south-africa)-trade-(?:deficit|surplus|balance)-in-\d{4}/i,
 ];
 
 export function isSkippedSlug(slug: string): boolean {
