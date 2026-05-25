@@ -18,13 +18,74 @@ export interface SendOpts {
   disableNotification?: boolean;
 }
 
-async function postSend(body: Record<string, unknown>): Promise<{ ok: boolean; description?: string }> {
+async function postSend(body: Record<string, unknown>): Promise<{ ok: boolean; description?: string; result?: { message_id: number } }> {
   const res = await request(`${API}/sendMessage`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  return (await res.body.json()) as { ok: boolean; description?: string };
+  return (await res.body.json()) as { ok: boolean; description?: string; result?: { message_id: number } };
+}
+
+/**
+ * Send a message and return the resulting message_id (or null on failure).
+ * Used when caller needs to delete the message later (e.g. /watch_digest
+ * auto-cleanup after 60s).
+ */
+export async function sendMessageReturningId(opts: SendOpts): Promise<number | null> {
+  if (!TOKEN) return null;
+  const body: Record<string, unknown> = {
+    chat_id: opts.chatId,
+    text: opts.text || "",
+    disable_web_page_preview: true,
+  };
+  if (opts.threadId) body.message_thread_id = Number(opts.threadId);
+  if (opts.parseMode) body.parse_mode = opts.parseMode;
+  if (opts.disableNotification) body.disable_notification = true;
+  try {
+    let data = await postSend(body);
+    if (!data.ok) {
+      const desc = data.description || "";
+      if (opts.parseMode && /can't parse|entities/i.test(desc)) {
+        const { parse_mode: _pm, ...plain } = body;
+        void _pm;
+        data = await postSend(plain);
+      }
+    }
+    if (!data.ok) {
+      err("telegram", `sendMessageReturningId failed: ${data.description}`);
+      return null;
+    }
+    return data.result?.message_id ?? null;
+  } catch (e) {
+    err("telegram", "sendMessageReturningId exception", e);
+    return null;
+  }
+}
+
+/**
+ * Delete a message by id. Bot must have rights (own messages always OK;
+ * other users' messages require admin + "Can Delete Messages" perm in
+ * supergroup). Logs but does not throw on failure.
+ */
+export async function deleteMessage(chatId: string, messageId: number): Promise<boolean> {
+  if (!TOKEN) return false;
+  try {
+    const res = await request(`${API}/deleteMessage`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, message_id: messageId }),
+    });
+    const data = (await res.body.json()) as { ok: boolean; description?: string };
+    if (!data.ok) {
+      log("telegram", `deleteMessage ${messageId} skipped: ${data.description}`);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    err("telegram", "deleteMessage exception", e);
+    return false;
+  }
 }
 
 export async function sendMessage(opts: SendOpts): Promise<boolean> {

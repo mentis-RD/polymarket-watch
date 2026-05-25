@@ -6,7 +6,8 @@ import { request } from "undici";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
-import { sendMessage } from "./telegram.js";
+import { sendMessage, sendMessageReturningId, deleteMessage } from "./telegram.js";
+import { isSkippedCategoryEvent } from "./category-filter.js";
 import { heartbeat } from "./heartbeat.js";
 import { writeAtomic } from "./atomic-write.js";
 import { escapeMd } from "./markdown.js";
@@ -219,6 +220,120 @@ async function handleWl(msg: TGMessage): Promise<void> {
       return `• \`${escapeMd(s)}\` ${e.risk_tag}${subs}${end}${reason}`;
     });
   await reply(msg, `📋 watchlist (${slugs.length} events):\n${lines.join("\n")}`);
+}
+
+/**
+ * Bulk-add every event from the last 24h of new_events.jsonl (same
+ * window as the daily digest sends). Existing watchlist entries kept;
+ * expired events / no-sub events / Gamma errors skipped silently.
+ *
+ * Reply auto-deletes (both user command and bot reply) after 60s so the
+ * command channel stays clean. Auto-delete of user message requires bot
+ * to be admin with "Can Delete Messages" — falls back gracefully if not.
+ */
+async function handleWatchDigest(msg: TGMessage): Promise<void> {
+  const NEW_LOG_PATH = join(STATE_DIR, "new_events.jsonl");
+  if (!existsSync(NEW_LOG_PATH)) {
+    await reply(msg, "❌ no new_events.jsonl on disk yet");
+    return;
+  }
+  const since = Date.now() - 24 * 60 * 60 * 1000;
+  const slugs: string[] = [];
+  const seenSlugs = new Set<string>();
+  try {
+    const lines = readFileSync(NEW_LOG_PATH, "utf-8").split("\n").filter((l) => l.trim());
+    for (const line of lines) {
+      try {
+        const r = JSON.parse(line) as { ts: number; event_slug: string; tags?: string };
+        if (r.ts < since) continue;
+        if (seenSlugs.has(r.event_slug)) continue; // dedup if event appeared multiple times in window
+        const tagObjs = (r.tags || "").split("|").filter(Boolean).map((label) => ({ id: "", label, slug: "" }));
+        if (isSkippedCategoryEvent(tagObjs, r.event_slug)) continue;
+        seenSlugs.add(r.event_slug);
+        slugs.push(r.event_slug);
+      } catch { /* skip malformed line */ }
+    }
+  } catch (e) {
+    await reply(msg, `❌ failed to read new_events.jsonl: ${(e as Error).message}`);
+    return;
+  }
+
+  if (slugs.length === 0) {
+    await reply(msg, "❌ no events in last 24h after filter");
+    return;
+  }
+
+  // Acknowledge start so user knows the long-running job is alive.
+  const startMsgId = await sendMessageReturningId({
+    chatId: String(msg.chat.id),
+    threadId: msg.message_thread_id ? String(msg.message_thread_id) : undefined,
+    text: `⏳ /watch_digest: resolving ${slugs.length} events from last-24h digest (≈${Math.ceil(slugs.length * 0.2)}s)...`,
+    parseMode: "Markdown",
+  });
+
+  const wlBefore = watchlist.load();
+  const stats = { added: 0, skippedExisting: 0, skippedExpired: 0, skippedNoSubs: 0, errs: 0 };
+  const now = Date.now();
+  const newEntries: Record<string, watchlist.WatchEntry> = {};
+
+  for (const slug of slugs) {
+    if (wlBefore[slug]) { stats.skippedExisting++; continue; }
+    let event: PolyEventFull | null = null;
+    try {
+      event = await resolveEventFromAnySlug(slug);
+    } catch { stats.errs++; await sleep(200); continue; }
+    if (!event) { stats.errs++; await sleep(200); continue; }
+    if (event.endDate) {
+      const endTs = Date.parse(event.endDate);
+      if (Number.isFinite(endTs) && endTs < now) { stats.skippedExpired++; await sleep(200); continue; }
+    }
+    const subMarkets = buildSubMarkets(event);
+    const subsWithTokens = subMarkets.filter((sm) => sm.clob_token_ids.length > 0).length;
+    if (subMarkets.length === 0 || subsWithTokens === 0) { stats.skippedNoSubs++; await sleep(200); continue; }
+    newEntries[event.slug] = {
+      added_at: now,
+      added_by: "bulk_import",
+      risk_tag: "MED",
+      reason: "watch_digest",
+      event_slug: event.slug,
+      event_title: event.title || "",
+      end_date: event.endDate || "",
+      sub_markets: subMarkets,
+    };
+    stats.added++;
+    await sleep(200);
+  }
+
+  if (Object.keys(newEntries).length > 0) {
+    const wl = watchlist.load();
+    Object.assign(wl, newEntries);
+    watchlist.save(wl);
+  }
+
+  const summary = [
+    `✅ /watch_digest done`,
+    `*added:* ${stats.added}`,
+    stats.skippedExisting > 0 ? `_already watched:_ ${stats.skippedExisting}` : null,
+    stats.skippedExpired > 0 ? `_expired:_ ${stats.skippedExpired}` : null,
+    stats.skippedNoSubs > 0 ? `_no open subs:_ ${stats.skippedNoSubs}` : null,
+    stats.errs > 0 ? `_fetch errors:_ ${stats.errs}` : null,
+  ].filter((x) => x).join("\n");
+
+  const replyMsgId = await sendMessageReturningId({
+    chatId: String(msg.chat.id),
+    threadId: msg.message_thread_id ? String(msg.message_thread_id) : undefined,
+    text: summary,
+    parseMode: "Markdown",
+  });
+
+  // Schedule cleanup: delete the progress msg + final summary + the user's
+  // command itself after 60s. Keeps command channel tidy.
+  setTimeout(async () => {
+    const chatId = String(msg.chat.id);
+    if (startMsgId) await deleteMessage(chatId, startMsgId);
+    if (replyMsgId) await deleteMessage(chatId, replyMsgId);
+    await deleteMessage(chatId, msg.message_id);
+  }, 60_000);
 }
 
 async function handleHelp(msg: TGMessage): Promise<void> {
@@ -490,6 +605,10 @@ async function handleMessage(msg: TGMessage): Promise<void> {
         break;
       case "wl":
         await handleWl(msg);
+        break;
+      case "watch_digest":
+      case "watchdigest":
+        await handleWatchDigest(msg);
         break;
       case "profile":
         await handleProfile(msg, parsed.args);
