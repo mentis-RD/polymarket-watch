@@ -6,7 +6,7 @@ import { request } from "undici";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
-import { sendMessage, sendMessageReturningId, deleteMessage } from "./telegram.js";
+import { sendMessage, sendMessageReturningId, deleteMessage, setMyCommands } from "./telegram.js";
 import { isSkippedCategoryEvent } from "./category-filter.js";
 import { heartbeat } from "./heartbeat.js";
 import { writeAtomic } from "./atomic-write.js";
@@ -678,6 +678,20 @@ if (!TOKEN) {
 }
 
 log("tg-control", `starting (chat=${ALLOWED_CHAT}, poll_timeout=${POLL_TIMEOUT_SEC}s)`);
+
+// Register command menu so the "/" UI in Telegram shows our commands.
+// Idempotent — Telegram caches per-bot. Re-runs at every restart so
+// deploys auto-sync any new command additions.
+void setMyCommands([
+  { command: "watch", description: "watch event/market: /watch <slug> [HIGH|MED] [reason]" },
+  { command: "unwatch", description: "remove from watchlist: /unwatch <slug>" },
+  { command: "wl", description: "list current watchlist" },
+  { command: "watch_digest", description: "bulk-add all events from last 24h digest" },
+  { command: "profile", description: "wallet profile: /profile <0xwallet>" },
+  { command: "scan_unknowns", description: "scan watchlist for fresh wallets with hidden funding" },
+  { command: "help", description: "show help" },
+]);
+
 pollLoop().catch((e) => {
   err("tg-control", "fatal", e);
   process.exit(1);

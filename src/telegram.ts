@@ -160,6 +160,37 @@ export async function sendDocument(opts: {
   }
 }
 
+/**
+ * Register the bot's command list via setMyCommands. Telegram caches
+ * this per-bot scope=default; calls are idempotent. Call once at
+ * tg-control startup so the command menu syncs after every deploy.
+ *
+ * `command` must be lowercase + digits + underscore, max 32 chars.
+ * `description` 1-256 chars.
+ */
+export async function setMyCommands(
+  commands: { command: string; description: string }[],
+): Promise<boolean> {
+  if (!TOKEN) return false;
+  try {
+    const res = await request(`${API}/setMyCommands`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ commands }),
+    });
+    const data = (await res.body.json()) as { ok: boolean; description?: string };
+    if (!data.ok) {
+      err("telegram", `setMyCommands failed: ${data.description}`);
+      return false;
+    }
+    log("telegram", `setMyCommands: registered ${commands.length} commands`);
+    return true;
+  } catch (e) {
+    err("telegram", "setMyCommands exception", e);
+    return false;
+  }
+}
+
 export async function notifyErrors(text: string): Promise<void> {
   const chat = process.env.TG_CHAT_MAIN;
   const thread = process.env.TG_THREAD_ERRORS;
