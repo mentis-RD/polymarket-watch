@@ -16,8 +16,24 @@ function load(): Store {
   }
 }
 
-function saveDisk(s: Store): void {
-  writeJsonAtomic(PATH, s);
+/**
+ * Merge MEM into disk state then write. sent_alerts.json is written by
+ * multiple processes (trade-enricher, market-monitor) — each has its own
+ * MEM containing only ITS signal types. A naive saveDisk(MEM) overwrites
+ * the file with one process's view and wipes the other's keys, defeating
+ * cooldowns. Merge-on-save: read disk → take MAX(diskTs, memTs) per key →
+ * write. Per-key latest-write-wins across processes.
+ */
+function saveDisk(mem: Store): void {
+  const onDisk = load();
+  // MAX(disk, mem) per key — newest timestamp wins so a re-marked alert
+  // bumps the cooldown forward, and other-process keys we don't have in
+  // mem are preserved.
+  const merged: Store = { ...onDisk };
+  for (const [k, ts] of Object.entries(mem)) {
+    if (!(k in merged) || merged[k] < ts) merged[k] = ts;
+  }
+  writeJsonAtomic(PATH, merged);
 }
 
 /**

@@ -407,12 +407,13 @@ export async function checkMarket(eventSlug: string, meta: MarketMeta): Promise<
     }
     if (maxPair.score < SCORE_PAIR_STRONG) continue;
 
-    // Cooldown keyed by conditionId + the 3-wallet "core" of the cluster
-    // (lowest-address triple). Adding a 4th/5th wallet later does NOT change
-    // the core triple, so the cooldown still suppresses drip re-alerts as
-    // the cluster grows by one wallet at a time.
-    const core = [...cluster].sort().slice(0, 3).join(",");
-    const cooldownKey = `cluster:${eventSlug}:${core}`;
+    // Per-EVENT cooldown — was per-wallet-core (sorted lowest triple) but
+    // that fired drip alerts on hot events where multiple distinct clusters
+    // formed concurrently (e.g. iran-ceasefire-continues-through fired 5x
+    // in one cycle). User signal: one coord-cluster alert per event per
+    // cooldown window is enough; if user wants to inspect distinct sub-
+    // clusters they can /profile wallets manually.
+    const cooldownKey = `cluster:${eventSlug}`;
     if (!canAlert(cooldownKey, COOLDOWN_MS)) continue;
 
     const totalNotional = cluster.reduce((s, w) => s + (wallets.get(w)?.total_notional ?? 0), 0);
