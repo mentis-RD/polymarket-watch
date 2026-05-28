@@ -95,11 +95,21 @@ interface AlertMeta {
   risk_tag: string;
 }
 
+/**
+ * Near-certain price band — bets at >=95c or <=5c carry no informational
+ * edge (market already effectively decided). User directive: drop these
+ * everywhere, not just from the digest. Trades in this band never enter
+ * the position tracker so they can't trip an alert.
+ */
+const EXTREME_PRICE_HIGH = 0.95;
+const EXTREME_PRICE_LOW = 0.05;
+
 export async function handleEnrichedTrade(
   trade: PolyTrade,
   meta: AlertMeta,
 ): Promise<void> {
   if (trade.side !== "BUY") return; // only count opens for now
+  if (trade.price >= EXTREME_PRICE_HIGH || trade.price <= EXTREME_PRICE_LOW) return; // near-certain, no edge
 
   sweepStaleWallets();
 

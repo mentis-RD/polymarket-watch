@@ -38,6 +38,56 @@ curl -s "https://gamma-api.polymarket.com/events?slug=<slug>" \
   | jq -r '.[0].title // empty'
 ```
 
+=== STEP 2.5: QUALITY FILTERS (drop noise before grouping) ===
+
+Apply these to every alert. They encode hard-won feedback — a raw alert
+list is mostly noise without them.
+
+(a) EXTREME-PRICE — drop any alert whose position was taken at >=0.95 or
+    <=0.05 (near-certain bet / lottery ticket, no edge). The live signals
+    now pre-filter this, but older log lines may predate the fix, so
+    enforce here too. For fresh-wallet you can read the price from the
+    live alert format ("@0.94"); if unavailable, fetch last trade price
+    from data-api.
+
+(b) FAST-SELL — for each fresh-wallet alert, check whether the wallet
+    still holds the flagged position at digest time. Query current
+    position:
+    ```
+    curl -s "https://data-api.polymarket.com/positions?user=<wallet>" \
+      | jq '[.[] | select(.conditionId=="<cond>")] | .[0].size // 0'
+    ```
+    If current size < 50% of the alerted notional/size → wallet has
+    sold most of the position the alert was about → DROP it (a signal
+    they've already exited is not actionable). Annotate dropped count in
+    a footer if you like, but do not list them.
+
+(c) NON-FRESH — the "hidden funding" path fires on wallets with no $1k+
+    USDC inflow on record, but many are seasoned traders funded another
+    way. Verify freshness by trade history:
+    ```
+    curl -s "https://data-api.polymarket.com/trades?user=<wallet>&limit=1&offset=1000" | jq 'length'
+    ```
+    (or fetch the wallet's earliest trade timestamp). If the wallet has
+    >~1000 lifetime trades OR first trade > 90 days ago → it is NOT
+    fresh. Relabel the alert from "hidden funding"/"fresh-wallet" to
+    "established wallet" and DEMOTE it (only keep if notional is large,
+    e.g. >$25k; otherwise drop). A genuinely fresh wallet (few trades,
+    recent first activity) with hidden funding stays as a top signal.
+
+(d) HIGH-FREQUENCY (for the repeating-participants section only) — a
+    wallet that appears across many signals because it trades 1000s of
+    times/day is a market-maker/bot, not a coordinator. Count last-24h
+    trades:
+    ```
+    curl -s "https://data-api.polymarket.com/trades?user=<wallet>&limit=1000" \
+      | jq '[.[] | select(.timestamp > (now - 86400))] | length'
+    ```
+    If >500 trades in 24h → EXCLUDE from "🔁 Повторяющиеся участники"
+    (its cross-signal presence is mechanical, not meaningful). Such a
+    wallet may still appear in a theme section if its single position is
+    notable, but never as a "repeating participant".
+
 === STEP 3: group by THEME ===
 
 Cluster events by inferred topic from titles + slugs. Heuristics:
@@ -56,8 +106,11 @@ weight cluster > fresh-wallet > cross-market > volume-spike.
 === STEP 4: cross-reference wallets ===
 
 A wallet appearing in 2+ different signal types in the 24h window is
-high-signal. Build a "🔁 Повторяющиеся участники" section listing wallets
-present in ≥2 signals with which signals + events.
+high-signal — UNLESS it's a high-frequency market-maker (filter 2.5d:
+>500 trades/24h → exclude from this section entirely). Build a "🔁
+Повторяющиеся участники" section listing the surviving wallets, each with
+which signals + events they hit. If all candidates were filtered as
+high-frequency, omit the section.
 
 === STEP 5: format message ===
 
@@ -85,7 +138,14 @@ _<YYYY-MM-DD> 09:00 Europe/Berlin_
 • ...
 
 *Всего:* freshwallet=N · cluster=M · xmarket=K · volspike=L
+_отсеяно: fast-sell N · extreme-price N · est-wallet N_
+💡 `/cluster <slug>` — состав любого кластера
 ```
+
+For cluster (🔥) lines, the user can't act on a bare count — so always
+append the event slug in a way that makes `/cluster <slug>` obvious, e.g.
+end the line with `· /cluster <slug>` or just ensure the slug is visible.
+The footer hint covers the general case.
 
 Constraints:
 - Wallets ALWAYS as `[0xab12…cd34](polygonscan-url)` short clickable form

@@ -332,28 +332,35 @@ async function fireAlert(meta: MarketMeta, info: AlertInfo): Promise<void> {
  *
  * `meta.slug` here is the event_slug (cooldown + alert URL use it).
  */
-export async function checkMarket(eventSlug: string, meta: MarketMeta): Promise<void> {
+/** Result of cluster detection on one event — shared by checkMarket (alerting) and clusterReport (TG command). */
+interface DetectResult {
+  clusters: string[][];
+  wallets: Map<string, WalletAgg>;
+  pairScoreMap: Map<string, PairScore>;
+}
+
+/**
+ * Pure detection: aggregate event trades → drop tiny → enrich profiles →
+ * pairwise score → connected components. No alerting, no cooldown side
+ * effects. Returns null if nothing qualifies.
+ */
+async function detectClusters(eventSlug: string): Promise<DetectResult | null> {
   const trades = getForEvent(eventSlug, WINDOW_MS);
-  if (trades.length < MIN_CLUSTER_SIZE) return;
+  if (trades.length < MIN_CLUSTER_SIZE) return null;
 
   const wallets = aggregateWallets(trades);
-  // Drop tiny wallets. Two-pass (collect then delete) — Map mutation during
-  // iteration is technically safe per spec, but explicit two-pass is clearer
-  // and avoids engine quirks if the iteration semantics ever drift.
   const tinyWallets: string[] = [];
   for (const [w, agg] of wallets) {
     if (agg.total_notional < MIN_NOTIONAL) tinyWallets.push(w);
   }
   for (const w of tinyWallets) wallets.delete(w);
-  if (wallets.size < MIN_CLUSTER_SIZE) return;
+  if (wallets.size < MIN_CLUSTER_SIZE) return null;
   if (wallets.size > MAX_WALLETS_PER_MARKET) {
-    // Keep top N by notional.
     const sorted = [...wallets.entries()].sort((a, b) => b[1].total_notional - a[1].total_notional);
     wallets.clear();
     for (const [w, a] of sorted.slice(0, MAX_WALLETS_PER_MARKET)) wallets.set(w, a);
   }
 
-  // Enrich with age + funding info.
   const profiles = await profileWallets([...wallets.keys()]);
   for (const [w, agg] of wallets) {
     const p = profiles.get(w);
@@ -368,7 +375,6 @@ export async function checkMarket(eventSlug: string, meta: MarketMeta): Promise<
     }
   }
 
-  // Pairwise scoring → adjacency.
   const adj = new Map<string, Set<string>>();
   const pairScoreMap = new Map<string, PairScore>();
   const arr = [...wallets.values()];
@@ -388,7 +394,66 @@ export async function checkMarket(eventSlug: string, meta: MarketMeta): Promise<
   }
 
   const clusters = findClusters(adj);
-  if (clusters.length === 0) return;
+  if (clusters.length === 0) return null;
+  return { clusters, wallets, pairScoreMap };
+}
+
+/**
+ * On-demand cluster report for the `/cluster <event_slug>` TG command.
+ * Lists every detected cluster's member wallets with side / notional /
+ * age so the user can actually act on the "cluster exists" fact.
+ * Returns a Markdown string (caller sends it).
+ */
+export async function clusterReport(eventSlug: string): Promise<string> {
+  let res: DetectResult | null;
+  try {
+    res = await detectClusters(eventSlug);
+  } catch (e) {
+    return `❌ cluster scan failed: ${(e as Error).message}`;
+  }
+  if (!res) return `🔍 no qualifying cluster on \`${eventSlug}\` (need ≥${MIN_CLUSTER_SIZE} linked wallets, each ≥$${MIN_NOTIONAL} in last 48h)`;
+
+  // Keep only clusters with a strong (≥0.8) internal pair, matching the
+  // alert bar, so the report mirrors what would have fired.
+  const out: string[] = [`🔗 *Clusters on* \`${eventSlug}\``];
+  let shown = 0;
+  for (const cluster of res.clusters) {
+    let maxScore = 0;
+    let maxFactors: string[] = [];
+    for (let i = 0; i < cluster.length; i++) {
+      for (let j = i + 1; j < cluster.length; j++) {
+        const k = cluster[i] < cluster[j] ? `${cluster[i]}|${cluster[j]}` : `${cluster[j]}|${cluster[i]}`;
+        const ps = res.pairScoreMap.get(k);
+        if (ps && ps.score > maxScore) { maxScore = ps.score; maxFactors = ps.factors; }
+      }
+    }
+    if (maxScore < SCORE_PAIR_STRONG) continue;
+    shown++;
+    const side0 = cluster.reduce((s, w) => s + (res!.wallets.get(w)?.net_outcome0_notional ?? 0), 0);
+    const side1 = cluster.reduce((s, w) => s + (res!.wallets.get(w)?.net_outcome1_notional ?? 0), 0);
+    const domSide = side0 >= side1 ? "YES" : "NO";
+    const total = cluster.reduce((s, w) => s + (res!.wallets.get(w)?.total_notional ?? 0), 0);
+    out.push(`\n*Cluster ${shown}* — ${cluster.length} wallets · *${domSide}* · $${Math.round(total).toLocaleString("en-US")} · pair ${maxScore.toFixed(2)} (${maxFactors.join(", ")})`);
+    const rows = cluster
+      .map((w) => res!.wallets.get(w)!)
+      .sort((a, b) => b.total_notional - a.total_notional);
+    for (const agg of rows) {
+      const net = agg.net_outcome0_notional - agg.net_outcome1_notional;
+      const wSide = net >= 0 ? "Y" : "N";
+      const amt = Math.abs(net);
+      const age = agg.age_days === null ? "no-inflow" : `${agg.age_days}d`;
+      const fund = agg.funding_source ? ` · ${agg.funding_source}` : "";
+      out.push(`• [${agg.wallet.slice(0, 6)}…${agg.wallet.slice(-4)}](https://polygonscan.com/address/${agg.wallet}) ${wSide} $${Math.round(amt).toLocaleString("en-US")} · ${age}${fund}`);
+    }
+  }
+  if (shown === 0) return `🔍 linked wallets found on \`${eventSlug}\` but none meet the strong-pair bar (≥${SCORE_PAIR_STRONG})`;
+  return out.join("\n");
+}
+
+export async function checkMarket(eventSlug: string, meta: MarketMeta): Promise<void> {
+  const res = await detectClusters(eventSlug);
+  if (!res) return;
+  const { clusters, wallets, pairScoreMap } = res;
 
   for (const cluster of clusters) {
     // Require at least one strong pair (≥0.8) within the cluster.

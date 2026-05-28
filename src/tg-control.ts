@@ -8,6 +8,7 @@ import { join } from "node:path";
 
 import { sendMessage, sendMessageReturningId, deleteMessage, setMyCommands } from "./telegram.js";
 import { isSkippedCategoryEvent } from "./category-filter.js";
+import { clusterReport } from "./signals/coordinated-cluster.js";
 import { heartbeat } from "./heartbeat.js";
 import { writeAtomic } from "./atomic-write.js";
 import { escapeMd } from "./markdown.js";
@@ -336,6 +337,29 @@ async function handleWatchDigest(msg: TGMessage): Promise<void> {
   }, 60_000);
 }
 
+/**
+ * /cluster <event_slug> — on-demand cluster report. Lists member wallets
+ * with side / notional / age for each detected cluster on the event, so
+ * the user can actually act on a "coordinated cluster" alert (the live
+ * alert + digest only show counts). Accepts an event OR sub-market slug
+ * and resolves to the parent event first.
+ */
+async function handleCluster(msg: TGMessage, args: string[]): Promise<void> {
+  if (args.length === 0) {
+    await reply(msg, "usage: `/cluster <event-or-market-slug>`");
+    return;
+  }
+  const slug = args[0];
+  // Resolve to parent event slug (cluster analysis aggregates at event level).
+  let eventSlug = slug;
+  try {
+    const ev = await resolveEventFromAnySlug(slug);
+    if (ev?.slug) eventSlug = ev.slug;
+  } catch { /* fall back to raw slug */ }
+  const report = await clusterReport(eventSlug);
+  await reply(msg, report);
+}
+
 async function handleHelp(msg: TGMessage): Promise<void> {
   await reply(
     msg,
@@ -610,6 +634,9 @@ async function handleMessage(msg: TGMessage): Promise<void> {
       case "watchdigest":
         await handleWatchDigest(msg);
         break;
+      case "cluster":
+        await handleCluster(msg, parsed.args);
+        break;
       case "profile":
         await handleProfile(msg, parsed.args);
         break;
@@ -687,6 +714,7 @@ void setMyCommands([
   { command: "unwatch", description: "remove from watchlist: /unwatch <slug>" },
   { command: "wl", description: "list current watchlist" },
   { command: "watch_digest", description: "bulk-add all events from last 24h digest" },
+  { command: "cluster", description: "show coordinated-cluster wallets: /cluster <slug>" },
   { command: "profile", description: "wallet profile: /profile <0xwallet>" },
   { command: "scan_unknowns", description: "scan watchlist for fresh wallets with hidden funding" },
   { command: "help", description: "show help" },
