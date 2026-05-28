@@ -555,6 +555,28 @@ const SKIP_SLUG_RES: RegExp[] = [
   // 56) Tesla quarterly delivery count — companion to rule 18 quarterly
   //     metric brackets in `how-many-` shape rather than `will-X-q[N]-...`.
   /^how-many-tesla-deliveries-in-q[1-4]-/i,
+  // === RULES 57-58: asset price-target / on-chain-metric brackets that
+  //     slipped the bulk-load (caught live via volume-spike on
+  //     will-ethereum-hit-1k-or-3k-first). All public price / aggregator
+  //     metric polling, no insider edge. ===
+  // 57) Crypto/asset price-level targets:
+  //     - "will-ethereum-hit-1k-or-3k-first" (which level first race)
+  //     - "will-bitcoin-hit-150k-by-2027" (generic crypto price hit)
+  //     - "crude-oil-all-time-high-by", "<asset>-all-time-high-by"
+  /-hit-\$?\d+k?-or-\$?\d+k?-first\b/i,
+  /^will-(?:bitcoin|btc|ethereum|eth|solana|sol|xrp|ripple|dogecoin|doge|bnb|cardano|ada|avalanche|avax|chainlink|link|polkadot|dot|litecoin|ltc)-(?:hit|reach|top|exceed|pass|cross|above|below)-\$?[\d.]+[kmb]?\b/i,
+  /^[a-z][a-z-]+-all-time-high-(?:by|in|before)\b/i,
+  // 58) On-chain / market-cap aggregate metric brackets:
+  //     - "what-market-cap-will-strc-reach-by-june-30"
+  //     - "will-bitcoin-kimchi-premium-hit-8-in-2026"
+  //     - "hyperliquid-open-interest-flipped-in-2026"
+  //     - "will-united-stables-hit-4b-in-2026" (stablecoin supply)
+  //     - "will-a-coin-launched-in-2026-end-the-year-above-20b-fdv"
+  /^what-market-cap-will-[a-z0-9-]+-reach-/i,
+  /-kimchi-premium-(?:hit|reach|above|below)/i,
+  /-open-interest-(?:flipped|hit|reach|above|below)/i,
+  /^will-[a-z-]*stables?-hit-\$?\d/i,
+  /-end-the-year-above-\$?[\d.]+[kmb]?-fdv\b/i,
 ];
 
 export function isSkippedSlug(slug: string): boolean {
