@@ -139,13 +139,13 @@ _<YYYY-MM-DD> 09:00 Europe/Berlin_
 
 *Всего:* freshwallet=N · cluster=M · xmarket=K · volspike=L
 _отсеяно: fast-sell N · extreme-price N · est-wallet N_
-💡 `/cluster <slug>` — состав любого кластера
 ```
 
-For cluster (🔥) lines, the user can't act on a bare count — so always
-append the event slug in a way that makes `/cluster <slug>` obvious, e.g.
-end the line with `· /cluster <slug>` or just ensure the slug is visible.
-The footer hint covers the general case.
+For cluster (🔥) lines: do NOT put a `/cluster` text command. Instead,
+collect every cluster event_slug you list and attach an INLINE KEYBOARD
+to the message (STEP 6) — one tappable button per cluster that fires the
+report. The message body just shows the cluster line; the button below
+does the drill-in.
 
 Constraints:
 - Wallets ALWAYS as `[0xab12…cd34](polygonscan-url)` short clickable form
@@ -162,18 +162,38 @@ Source env from .env:
 set -a; source .env; set +a
 ```
 
-Send via Bot API:
+Build an inline keyboard with one button per listed cluster so the user
+can tap to see its member wallets. tg-control handles callback_data of
+shape `c:<event_slug>` → posts the cluster report into the thread.
+
+```
+# JSON: rows of up to 2 buttons. Label = short readable cluster name
+# (truncate to ~24 chars). callback_data = "c:<event_slug>".
+# IMPORTANT: callback_data max 64 bytes — if "c:"+slug > 64, skip that
+# button (rare; very long slugs).
+REPLY_MARKUP='{"inline_keyboard":[
+  [{"text":"🔗 Iran ceasefire","callback_data":"c:iran-ceasefire-continues-through"}],
+  [{"text":"🔗 Russia x Ukraine","callback_data":"c:russia-x-ukraine-ceasefire-agreement-by"}]
+]}'
+```
+
+Send via Bot API (attach reply_markup only if ≥1 cluster button exists):
 ```
 curl -s "https://api.telegram.org/bot$TG_TOKEN/sendMessage" \
   -d chat_id="$TG_CHAT_MAIN" \
   -d message_thread_id="$TG_THREAD_DIGEST" \
   -d parse_mode=Markdown \
   -d disable_web_page_preview=true \
-  --data-urlencode text="$MESSAGE"
+  --data-urlencode text="$MESSAGE" \
+  --data-urlencode reply_markup="$REPLY_MARKUP"
 ```
 
 Check `ok:true` in response. If `can't parse entities` — retry once
-without parse_mode (раз escape failure не должен убить дайджест).
+without parse_mode (раз escape failure не должен убить дайджест). If
+the message is too long for a single send (>4096 chars) OR has >~30
+cluster buttons, split: send the themed body first (no markup), then a
+short follow-up "🔗 Кластеры — тапни чтобы раскрыть" carrying the
+inline keyboard.
 
 === STEP 7: dedup ===
 

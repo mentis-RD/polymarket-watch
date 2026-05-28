@@ -35,6 +35,12 @@ interface TGUpdate {
   update_id: number;
   message?: TGMessage;
   edited_message?: TGMessage;
+  callback_query?: {
+    id: string;
+    data?: string;
+    message?: TGMessage;
+    from?: { id: number; first_name?: string; username?: string };
+  };
 }
 
 interface TGMessage {
@@ -65,11 +71,47 @@ function saveOffset(n: number): void {
 // seen_events.json is owned by event-discovery and not read here.
 
 async function fetchUpdates(offset: number): Promise<TGUpdate[]> {
-  const url = `https://api.telegram.org/bot${TOKEN}/getUpdates?offset=${offset}&timeout=${POLL_TIMEOUT_SEC}&allowed_updates=%5B%22message%22%5D`;
+  // allowed_updates includes callback_query so inline-keyboard button taps
+  // (e.g. the digest's "show cluster" buttons) reach us.
+  const url = `https://api.telegram.org/bot${TOKEN}/getUpdates?offset=${offset}&timeout=${POLL_TIMEOUT_SEC}&allowed_updates=%5B%22message%22%2C%22callback_query%22%5D`;
   const res = await request(url, { bodyTimeout: (POLL_TIMEOUT_SEC + 10) * 1000 });
   const data = (await res.body.json()) as { ok: boolean; result?: TGUpdate[]; description?: string };
   if (!data.ok) throw new Error(`getUpdates: ${data.description}`);
   return data.result || [];
+}
+
+async function answerCallback(callbackId: string, text?: string): Promise<void> {
+  try {
+    await request(`https://api.telegram.org/bot${TOKEN}/answerCallbackQuery`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ callback_query_id: callbackId, text: text || "" }),
+    });
+  } catch (e) {
+    err("tg-control", "answerCallbackQuery failed", e);
+  }
+}
+
+/**
+ * Handle an inline-button tap. callback_data shape `c:<event_slug>` →
+ * run cluster report and post it into the same thread. The digest
+ * attaches one such button per listed cluster so the user gets the
+ * member wallets with a single tap.
+ */
+async function handleCallback(cq: NonNullable<TGUpdate["callback_query"]>): Promise<void> {
+  const data = cq.data || "";
+  await answerCallback(cq.id, "scanning cluster…");
+  if (!data.startsWith("c:")) return;
+  const eventSlug = data.slice(2);
+  const m = cq.message;
+  if (!m) return;
+  const report = await clusterReport(eventSlug);
+  await sendMessage({
+    chatId: String(m.chat.id),
+    threadId: m.message_thread_id ? String(m.message_thread_id) : undefined,
+    text: report,
+    parseMode: "Markdown",
+  });
 }
 
 async function reply(msg: TGMessage, text: string): Promise<void> {
@@ -346,7 +388,10 @@ async function handleWatchDigest(msg: TGMessage): Promise<void> {
  */
 async function handleCluster(msg: TGMessage, args: string[]): Promise<void> {
   if (args.length === 0) {
-    await reply(msg, "usage: `/cluster <event-or-market-slug>`");
+    await reply(
+      msg,
+      "usage: `/cluster <slug>`\n_slug = the part after `/event/` in a Polymarket URL, e.g._\n`polymarket.com/event/`*`russia-x-ukraine-ceasefire-agreement-by`*\n_→_ `/cluster russia-x-ukraine-ceasefire-agreement-by`\n_(a sub-market slug also works — it resolves to the parent event)_",
+    );
     return;
   }
   const slug = args[0];
@@ -672,6 +717,12 @@ async function pollLoop(): Promise<void> {
             await handleMessage(msg);
           } catch (e) {
             err("tg-control", "handleMessage failed", e);
+          }
+        } else if (u.callback_query) {
+          try {
+            await handleCallback(u.callback_query);
+          } catch (e) {
+            err("tg-control", "handleCallback failed", e);
           }
         }
         if (u.update_id >= offset) offset = u.update_id + 1;

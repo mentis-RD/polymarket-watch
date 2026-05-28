@@ -2,7 +2,7 @@ import { getProfile, type WalletProfile } from "../wallet-profiler.js";
 import { canAlert, markAlerted } from "../alert-cooldown.js";
 import { sendMessage } from "../telegram.js";
 import { escapeMd } from "../markdown.js";
-import { eventLink, walletLink, fmtMoney, sideLabel, shortDate } from "../alert-format.js";
+import { eventLink, walletLink, fmtMoney, sideLabel, shortDate, EXTREME_PRICE_HIGH } from "../alert-format.js";
 import { log } from "../log.js";
 import { categoryBucket, type FundingCategory } from "../funding-source.js";
 import { getForEvent } from "../enriched-store.js";
@@ -44,6 +44,9 @@ interface WalletAgg {
 function aggregateWallets(trades: EnrichedTrade[]): Map<string, WalletAgg> {
   const map = new Map<string, WalletAgg>();
   for (const t of trades) {
+    // Skip near-certain BUYs (>=95c) — no edge, shouldn't count toward
+    // cluster position math. SELLs and cheap buys stay.
+    if (t.side === "BUY" && t.price >= EXTREME_PRICE_HIGH) continue;
     const w = t.wallet.toLowerCase();
     let agg = map.get(w);
     if (!agg) {

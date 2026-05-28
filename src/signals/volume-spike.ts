@@ -2,7 +2,7 @@ import type { TradeEvent } from "../clob-ws.js";
 import { canAlert, markAlerted } from "../alert-cooldown.js";
 import { sendMessage } from "../telegram.js";
 import { escapeMd } from "../markdown.js";
-import { marketLink, fmtMoneyShort, shortDate } from "../alert-format.js";
+import { marketLink, fmtMoneyShort, shortDate, EXTREME_PRICE_HIGH } from "../alert-format.js";
 import { log } from "../log.js";
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -47,6 +47,11 @@ export class VolumeSpikeDetector {
 
   /** Ingest a trade. Mutates the per-market bucket map. */
   ingest(slug: string, t: TradeEvent): void {
+    // Skip near-certain trades (>=95c) — volume churn on an already-decided
+    // market isn't an informative spike. Trades while the market is still
+    // contested (<95c) still accumulate, so a news-driven move INTO 95c
+    // still trips the spike on the contested-price volume.
+    if (t.price >= EXTREME_PRICE_HIGH) return;
     let perSlug = this.buckets.get(slug);
     if (!perSlug) {
       perSlug = new Map();

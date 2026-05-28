@@ -1,7 +1,7 @@
 import { canAlert, markAlerted } from "../alert-cooldown.js";
 import { sendMessage } from "../telegram.js";
 import { escapeMd } from "../markdown.js";
-import { walletLink, marketLink, fmtMoney, sideLabel } from "../alert-format.js";
+import { walletLink, marketLink, fmtMoney, sideLabel, EXTREME_PRICE_HIGH } from "../alert-format.js";
 import { log } from "../log.js";
 import { getRecent, type EnrichedTrade } from "../enriched-store.js";
 
@@ -71,6 +71,8 @@ function aggregatePerWallet(trades: EnrichedTrade[]): Map<string, Map<string, Ma
   // signal-rich than between strikes of the same event.
   const out = new Map<string, Map<string, MarketBet>>();
   for (const t of trades) {
+    // Skip near-certain BUYs (>=95c) — no edge.
+    if (t.side === "BUY" && t.price >= EXTREME_PRICE_HIGH) continue;
     const w = t.wallet.toLowerCase();
     let perWallet = out.get(w);
     if (!perWallet) {

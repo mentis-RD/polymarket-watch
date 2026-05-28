@@ -14,6 +14,15 @@
  * escapeMd if it contains user-controlled text like a market question.
  */
 
+/**
+ * Near-certain price threshold. A BUY at >= this price means the market
+ * has already priced the outcome in — no informational edge, so we drop
+ * such trades from ALL signals (fresh-wallet, cluster, cross-market,
+ * volume-spike). Only the high end is filtered: a cheap buy (<=5c) is a
+ * long-shot / contrarian position that CAN carry signal, so it stays.
+ */
+export const EXTREME_PRICE_HIGH = 0.95;
+
 /** "0xab12…cd34" short form. */
 export function shortAddr(addr: string): string {
   if (!addr || addr.length < 12) return addr;
