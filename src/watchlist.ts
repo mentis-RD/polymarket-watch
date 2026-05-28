@@ -130,8 +130,36 @@ export function allConditionIds(): { conditionId: string; subSlug: string; event
 }
 
 /**
+ * Remove events whose every sub-market has been resolved (its condition_id
+ * is in `resolvedConditionIds`). This is the authoritative "the market is
+ * over" cleanup — independent of end_date, so it catches:
+ *   - markets that resolved EARLIER than their end_date
+ *   - markets with no end_date at all (resolution-tracker confirmed closed)
+ *   - normal markets, removed right after post-mortem instead of waiting
+ *     out the full 14d date grace
+ * resolution-tracker owns the post-mortem (early-winner detection) before
+ * the entry disappears, so removing here loses nothing.
+ */
+export function cleanupResolved(resolvedConditionIds: Set<string>): string[] {
+  const wl = load();
+  const removed: string[] = [];
+  for (const [slug, entry] of Object.entries(wl)) {
+    const subs = entry.sub_markets.filter((sm) => sm.condition_id);
+    if (subs.length === 0) continue; // no condition_ids to judge by
+    if (subs.every((sm) => resolvedConditionIds.has(sm.condition_id))) {
+      delete wl[slug];
+      removed.push(slug);
+    }
+  }
+  if (removed.length > 0) save(wl);
+  return removed;
+}
+
+/**
  * Auto-remove watchlist events whose end_date is more than `graceDays`
- * days in the past. Returns event_slugs that were removed.
+ * days in the past. Date-based safety net for events resolution-tracker
+ * never managed to post-mortem (Gamma 404, etc). Returns event_slugs
+ * that were removed.
  */
 export function cleanupExpired(graceDays = 14): string[] {
   const wl = load();

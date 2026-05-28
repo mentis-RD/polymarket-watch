@@ -731,8 +731,19 @@ async function pollLoop(): Promise<void> {
       heartbeat("tg-control", { offset });
 
       if (Date.now() - lastCleanup > CLEANUP_INTERVAL_MS) {
-        // 14d grace: resolution tracker needs the watchlist entry to find
-        // condition_id; 7d was too tight if the tracker is briefly down.
+        // Primary cleanup: remove events resolution-tracker has fully
+        // post-mortem'd (every sub-market resolved). Catches early
+        // resolution + no-end_date markets, and removes normal markets
+        // right after post-mortem instead of waiting out 14d.
+        const resolvedIds = loadResolvedConditionIds();
+        if (resolvedIds.size > 0) {
+          const doneRemoved = watchlist.cleanupResolved(resolvedIds);
+          if (doneRemoved.length > 0) {
+            log("tg-control", `auto-removed resolved: ${doneRemoved.join(", ")}`);
+          }
+        }
+        // Date-based safety net (14d grace) for anything the tracker
+        // never managed to process.
         const removed = watchlist.cleanupExpired(14);
         if (removed.length > 0) {
           log("tg-control", `auto-removed expired: ${removed.join(", ")}`);
@@ -748,6 +759,22 @@ async function pollLoop(): Promise<void> {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * Read the set of resolved condition_ids from resolution-tracker's
+ * state/resolutions.json (keyed by condition_id). Used by the cleanup
+ * tick to drop fully-resolved events. Returns empty set if file absent.
+ */
+function loadResolvedConditionIds(): Set<string> {
+  const path = join(STATE_DIR, "resolutions.json");
+  if (!existsSync(path)) return new Set();
+  try {
+    const obj = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+    return new Set(Object.keys(obj));
+  } catch {
+    return new Set();
+  }
 }
 
 if (!TOKEN) {

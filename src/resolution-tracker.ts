@@ -264,32 +264,45 @@ async function sendRecap(
   });
 }
 
-async function cycle(): Promise<void> {
+async function cycle(fullSweep: boolean): Promise<void> {
   const wl = watchlist.load();
   const resolutions = loadResolutions();
   const now = Date.now();
   let processed = 0;
+  let swept = 0;
 
   // Iterate every sub-market of every watchlist event. Each sub-market
   // resolves independently (different deadlines / different outcomes), so
   // we keep resolutions[] keyed by conditionId.
+  //
+  // Fast path (every cycle): only check sub-markets whose end_date has
+  // passed — cheap, a handful of Gamma fetches.
+  //
+  // Full sweep (fullSweep=true, daily + first run): ALSO check not-yet-
+  // ended and no-end_date sub-markets, because a market can resolve
+  // EARLY (event happened before the deadline) or have no deadline at
+  // all. Throttled since it can be thousands of fetches.
   for (const entry of Object.values(wl)) {
     for (const sm of entry.sub_markets) {
       if (!sm.condition_id) continue;
-      const subEnd = sm.end_date || entry.end_date;
-      if (!subEnd) continue;
-      const endTs = Date.parse(subEnd);
-      if (!Number.isFinite(endTs)) continue;
-      if (endTs > now) continue;
       if (resolutions[sm.condition_id]) continue;
+      const subEnd = sm.end_date || entry.end_date;
+      const endTs = subEnd ? Date.parse(subEnd) : NaN;
+      const ended = Number.isFinite(endTs) && endTs <= now;
+      if (!ended && !fullSweep) continue; // fast path skips live markets
       try {
         const ok = await checkMarket(sm.slug, sm.condition_id, resolutions);
         if (ok) processed++;
       } catch (e) {
         err("resolution-tracker", `checkMarket ${sm.slug} failed`, e);
       }
+      if (fullSweep && !ended) {
+        swept++;
+        await sleep(120); // throttle the big closed-sweep
+      }
     }
   }
+  if (fullSweep) log("resolution-tracker", `full sweep: checked ${swept} live markets for early resolution`);
 
   if (processed > 0) saveResolutions(resolutions);
 
@@ -303,9 +316,14 @@ async function cycle(): Promise<void> {
 
 async function main(): Promise<void> {
   log("resolution-tracker", "starting");
+  let n = 0;
   while (true) {
+    n++;
+    // Full closed-sweep on first run (clear backlog of early-closed /
+    // no-end_date markets) and once a day (every 24 hourly cycles).
+    const fullSweep = n === 1 || n % 24 === 0;
     try {
-      await cycle();
+      await cycle(fullSweep);
     } catch (e) {
       err("resolution-tracker", "cycle failed", e);
     }
