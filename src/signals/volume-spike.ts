@@ -10,8 +10,20 @@ const BASELINE_HOURS = 168; // 7 days
 const COOLDOWN_MS = 2 * HOUR_MS;
 const SPIKE_MULTIPLE = 10;
 const ONE_SIDED_PCT = 0.7;
+/**
+ * Volume is measured in USD notional (size × price), NOT share count.
+ * Share-count thresholds were meaningless across markets (100 shares of
+ * a 2c outcome is $2; 100 shares of a 90c outcome is $90). Absolute
+ * floor: the current hour must move at least this many dollars to even
+ * be considered for a spike — kills micro-spikes on thin/dead markets
+ * (e.g. a $1k trade on a market whose baseline is $10/hr = "100×" but
+ * is absolute pocket change). Set to $500 for the test pass.
+ */
+const MIN_CUR_VOL_USD = 500;
+/** Baseline floor (USD/hr) — prevents divide-by-near-zero multiples. */
+const MIN_BASELINE_USD = 10;
 
-/** Per-side hourly volume bucket (size summed, by BUY/SELL). */
+/** Per-side hourly volume bucket — USD notional summed, by BUY/SELL. */
 interface Bucket {
   buy: number;
   sell: number;
@@ -63,8 +75,10 @@ export class VolumeSpikeDetector {
       b = { buy: 0, sell: 0 };
       perSlug.set(hk, b);
     }
-    if (t.side === "BUY") b.buy += t.size;
-    else b.sell += t.size;
+    // USD notional, not share count.
+    const usd = t.size * t.price;
+    if (t.side === "BUY") b.buy += usd;
+    else b.sell += usd;
 
     // Trim old buckets.
     const cutoff = hk - BASELINE_HOURS;
@@ -83,10 +97,10 @@ export class VolumeSpikeDetector {
     for (const [slug, perSlug] of this.buckets) {
       const cur = perSlug.get(curH);
       if (!cur) continue;
-      const curVol = cur.buy + cur.sell;
-      if (curVol < 100) continue; // ignore trivial volumes
+      const curVol = cur.buy + cur.sell; // USD notional this hour
+      if (curVol < MIN_CUR_VOL_USD) continue; // absolute $ floor — kills micro-spikes
 
-      // Baseline: mean hourly volume across previous BASELINE_HOURS-1 hours, excluding current.
+      // Baseline: mean hourly USD volume across previous hours, excluding current.
       let total = 0;
       let count = 0;
       for (const [k, b] of perSlug) {
@@ -96,7 +110,7 @@ export class VolumeSpikeDetector {
       }
       if (count < 6) continue; // need at least 6 hours of history
       const baseline = total / count;
-      if (baseline < 10) continue; // skip dead markets
+      if (baseline < MIN_BASELINE_USD) continue; // skip dead markets / divide-by-tiny
 
       const multiple = curVol / baseline;
       if (multiple < SPIKE_MULTIPLE) continue;
