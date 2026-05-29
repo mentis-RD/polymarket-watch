@@ -43,24 +43,49 @@ curl -s "https://gamma-api.polymarket.com/events?slug=<slug>" \
 Apply these to every alert. They encode hard-won feedback — a raw alert
 list is mostly noise without them.
 
-(a) EXTREME-PRICE — drop any alert whose position was taken at >=0.95 or
-    <=0.05 (near-certain bet / lottery ticket, no edge). The live signals
-    now pre-filter this, but older log lines may predate the fix, so
-    enforce here too. For fresh-wallet you can read the price from the
-    live alert format ("@0.94"); if unavailable, fetch last trade price
-    from data-api.
+(a) EXTREME-PRICE — drop any alert whose position was taken at >=0.95
+    (near-certain bet, no edge). NOTE: only the HIGH end — a cheap buy
+    (<=0.05) is a long-shot/contrarian position that CAN be informative,
+    keep it. The live signals now pre-filter >=0.95, but older log lines
+    may predate the fix, so enforce here too. Read the price from the
+    fresh-wallet alert ("@0.92"); if unavailable, fetch last trade price.
 
-(b) FAST-SELL — for each fresh-wallet alert, check whether the wallet
-    still holds the flagged position at digest time. Query current
-    position:
+(b) POSITION RECONCILE — the alerted notional is a SNAPSHOT at alert
+    time (24h-net at that instant). By end of day the wallet may have
+    BOUGHT MORE (the real position is far bigger) or SOLD OUT. The
+    digest must show the ACTUAL end-of-day position, not the stale
+    alert number. (Real case 2026-05-29: alert said $97.6k but the
+    wallet accumulated to $2.3M on us-x-iran NO through the day.)
+
+    Step 1 — get the event's conditionId(s). You already fetch the event
+    from Gamma for the title; grab its market conditionIds:
+    ```
+    curl -s "https://gamma-api.polymarket.com/events?slug=<slug>" \
+      | jq -r '.[0].markets[].conditionId'
+    ```
+
+    Step 2 — fetch the wallet's live positions and sum the COST BASIS
+    across the matching conditionId(s) AND the alerted side (Yes/No):
     ```
     curl -s "https://data-api.polymarket.com/positions?user=<wallet>" \
-      | jq '[.[] | select(.conditionId=="<cond>")] | .[0].size // 0'
+      | jq --arg side "<NO|YES>" '
+        [ .[] | select(.conditionId=="<cond>")
+              | select((.outcome|ascii_upcase)==$side)
+              | (.initialValue // (.size*.avgPrice)) ] | add // 0'
     ```
-    If current size < 50% of the alerted notional/size → wallet has
-    sold most of the position the alert was about → DROP it (a signal
-    they've already exited is not actionable). Annotate dropped count in
-    a footer if you like, but do not list them.
+    (initialValue = USD cost basis = what they actually put in; fall back
+    to size×avgPrice. Sum across all event sub-markets if multi-market.)
+
+    Step 3 — REPLACE the displayed amount with this end-of-day cost basis.
+    This is the number that goes in the digest line, NOT the alert-time
+    notional. A wallet that scaled $97.6k → $2.3M now reads $2.3M.
+
+    Step 4 — drop if effectively exited: if the end-of-day cost basis is
+    < 30% of the alert-time notional (sold most of it) OR < $1k absolute
+    → DROP (they've left, not actionable). Count drops for the footer.
+
+    Annotate big movers: if end-of-day >= 2× the alert-time notional,
+    prefix the line with "📈 scaled in" so the accumulation is visible.
 
 (c) NON-FRESH — the "hidden funding" path fires on wallets with no $1k+
     USDC inflow on record, but many are seasoned traders funded another
@@ -124,6 +149,7 @@ _<YYYY-MM-DD> 09:00 Europe/Berlin_
 *🇮🇷 Iran / Middle East* (12)
 • 🔥 [Iran ceasefire continues through](https://polymarket.com/event/iran-...) — coord-cluster 37 wallets · *NO* $124k
 • 🚨 [Israel-Iran peace deal by](https://polymarket.com/event/israel-...) — fresh-wallet [0xab12…cd34](https://polygonscan.com/address/0xfull) *NO* $16k (hidden funding, score 1)
+• 🚨 📈 scaled in [US x Iran peace deal](https://polymarket.com/event/us-x-iran-...) — fresh-wallet [0x0f02…5bfb](https://polygonscan.com/address/0xfull) *NO* $2.3M (hidden funding, score 1)   ← end-of-day cost basis, not the $97.6k alert snapshot
 • 📈 [Strait of Hormuz traffic returns by end of May](https://polymarket.com/event/strait-...) — vol-spike 12.3× · 78% *NO*
 • ...
 
@@ -138,7 +164,8 @@ _<YYYY-MM-DD> 09:00 Europe/Berlin_
 • ...
 
 *Всего:* freshwallet=N · cluster=M · xmarket=K · volspike=L
-_отсеяно: fast-sell N · extreme-price N · est-wallet N_
+_отсеяно: exited N · extreme-price N · est-wallet N_
+_суммы fresh-wallet = позиция на конец дня (cost basis), не снапшот алерта_
 ```
 
 For cluster (🔥) lines: do NOT put a `/cluster` text command. Instead,
