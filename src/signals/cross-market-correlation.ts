@@ -283,6 +283,26 @@ export async function crossMarketReport(wallet: string): Promise<string> {
   const clusters = findKeywordClusters(bets);
   if (clusters.length === 0) return `🔍 no correlated-market cluster for ${walletLink(w)} (need ≥${MIN_CLUSTER_SIZE} markets sharing ≥${MIN_SHARED_KEYWORDS} keywords)`;
 
+  // Event_slug → all conditionIds the wallet traded for it. A cross-market
+  // bet is event-level but `bet.market` holds only ONE sub-market cid, so a
+  // multi-strike hold on a different strike would falsely read $0. Sum the
+  // wallet's current position over EVERY cid it traded for the event.
+  const eventCids = new Map<string, Set<string>>();
+  for (const t of trades) {
+    const ev = t.event_slug ?? t.slug;
+    (eventCids.get(ev) ?? eventCids.set(ev, new Set()).get(ev)!).add((t.market || "").toLowerCase());
+  }
+  const heldOnSide = (
+    positions: Map<string, [number, number]> | null,
+    eventSlug: string,
+    side: 0 | 1,
+  ): number | null => {
+    if (!positions) return null; // unknown
+    let v = 0;
+    for (const cid of eventCids.get(eventSlug) ?? []) v += positions.get(cid)?.[side] ?? 0;
+    return v;
+  };
+
   const positions = await fetchPositionMap(w); // null = unknown → don't prune
   const out: string[] = [`🔗 *Cross-market for* ${walletLink(w)}`];
   let shownClusters = 0;
@@ -290,10 +310,9 @@ export async function crossMarketReport(wallet: string): Promise<string> {
   for (const cluster of clusters) {
     // EOD review per market: keep where current held on the bet side >= $100.
     const survivors = cluster.filter((b) => {
-      if (!positions) return true; // unknown
       const side = b.net_outcome0_notional >= b.net_outcome1_notional ? 0 : 1;
-      const cur = positions.get(b.market.toLowerCase())?.[side] ?? 0;
-      if (cur >= MIN_CURRENT_POSITION_USD) return true;
+      const cur = heldOnSide(positions, b.slug, side);
+      if (cur === null || cur >= MIN_CURRENT_POSITION_USD) return true;
       pruned++;
       return false;
     });
@@ -307,9 +326,9 @@ export async function crossMarketReport(wallet: string): Promise<string> {
     const rows = survivors
       .map((b) => {
         const side = b.net_outcome0_notional >= b.net_outcome1_notional ? 0 : 1;
-        const cur = positions?.get(b.market.toLowerCase())?.[side];
+        const cur = heldOnSide(positions, b.slug, side);
         const net = Math.abs(b.net_outcome0_notional - b.net_outcome1_notional);
-        const amt = cur !== undefined && cur > 0 ? cur : net;
+        const amt = cur !== null && cur > 0 ? cur : net;
         return { b, side, amt };
       })
       .sort((a, b) => b.amt - a.amt);
