@@ -162,6 +162,33 @@ function isFresh(profile: WalletProfile): boolean {
   return Date.now() - profile.last_refreshed_ts < TTL_MS;
 }
 
+/**
+ * How many DISTINCT profiled wallets share this address as their funder
+ * (first_inflow_from or bridge_origin_wallet). A genuine private coordinator
+ * funds a handful of burners; a shared on-ramp / conduit funds many. The
+ * cluster signal uses this to neutralize the "same-funder" factor for high-
+ * fanout funders (they're services, not coordinators). Index rebuilt only
+ * when the profile cache file changes.
+ */
+let fanoutIndex: Map<string, number> | null = null;
+let fanoutForMtime = -1;
+export function getFunderFanout(funder: string): number {
+  if (!funder) return 0;
+  const cache = loadCache(); // refreshes memMtimeMs if disk changed
+  if (fanoutIndex === null || fanoutForMtime !== memMtimeMs) {
+    const idx = new Map<string, number>();
+    for (const p of Object.values(cache)) {
+      const seen = new Set<string>();
+      if (p.first_inflow_from) seen.add(p.first_inflow_from.toLowerCase());
+      if (p.bridge_origin_wallet) seen.add(p.bridge_origin_wallet.toLowerCase());
+      for (const a of seen) idx.set(a, (idx.get(a) ?? 0) + 1);
+    }
+    fanoutIndex = idx;
+    fanoutForMtime = memMtimeMs;
+  }
+  return fanoutIndex.get(funder.toLowerCase()) ?? 0;
+}
+
 function computeScore(ageDays: number | null): number {
   // No $1k+ USDC inflow on record — likely a small-fish trader that funded
   // via many tiny deposits. Don't flag on that alone; the wallet hasn't

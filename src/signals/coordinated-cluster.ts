@@ -1,4 +1,5 @@
-import { getProfile, type WalletProfile } from "../wallet-profiler.js";
+import { request } from "undici";
+import { getProfile, getFunderFanout, type WalletProfile } from "../wallet-profiler.js";
 import { canAlert, markAlerted } from "../alert-cooldown.js";
 import { sendMessage } from "../telegram.js";
 import { escapeMd } from "../markdown.js";
@@ -18,6 +19,16 @@ const MAX_WALLETS_PER_MARKET = 50; // O(n²) cap
 const TIME_TOLERANCE_MS = 60 * 60 * 1000; // ±60 min for "similar timing"
 const AMOUNT_TOLERANCE = 0.2; // ±20%
 const FRESH_AGE_DAYS = 21;
+/**
+ * A "private" funder shared by more than this many distinct profiled wallets
+ * is a shared on-ramp / conduit, NOT a coordinator — funding two proxies from
+ * it is no signal. Above the limit the same-funder / same-origin factor is
+ * neutralized. (Root-caused 2026-05-29: one shared funder 0xc417fd… glued 47
+ * unrelated wallets — incl. both YES and NO and a 5-yr-old wallet — into a
+ * bogus cluster on us-x-iran.) Kept generous: a genuine burner farm rarely
+ * exceeds this many distinct signal-firing recipients.
+ */
+const FUNDER_FANOUT_LIMIT = 20;
 
 import type { EnrichedTrade } from "../enriched-store.js";
 
@@ -96,6 +107,22 @@ function pairwiseScore(a: WalletAgg, b: WalletAgg): PairScore {
   const factors: string[] = [];
   let s = 0;
 
+  // ── SAME-SIDE GATE ──────────────────────────────────────────────────────
+  // Coordination is directional. NO edge between opposite sides, or when
+  // either wallet has no net position (only-sells / fully closed). This is a
+  // hard requirement, not a bonus — a cluster is one-sided by definition.
+  const aSide =
+    a.net_outcome0_notional > 0 || a.net_outcome1_notional > 0
+      ? a.net_outcome0_notional >= a.net_outcome1_notional ? 0 : 1
+      : null;
+  const bSide =
+    b.net_outcome0_notional > 0 || b.net_outcome1_notional > 0
+      ? b.net_outcome0_notional >= b.net_outcome1_notional ? 0 : 1
+      : null;
+  if (aSide === null || bSide === null || aSide !== bSide) {
+    return { score: 0, factors: [] };
+  }
+
   // Phase 6b: same true origin on source chain (after Relay tracing).
   // Critical: only fire if the origin itself is a private wallet, not a
   // CEX hot wallet or service. Many real users withdraw from the same
@@ -106,7 +133,11 @@ function pairwiseScore(a: WalletAgg, b: WalletAgg): PairScore {
     a.bridge_origin_wallet === b.bridge_origin_wallet
   ) {
     const originBucket = categoryBucket(a.bridge_origin_funding_source);
-    if (originBucket === "private") {
+    if (originBucket === "private" && getFunderFanout(a.bridge_origin_wallet) > FUNDER_FANOUT_LIMIT) {
+      // High-fanout "private" origin = shared conduit/service, not a
+      // coordinator. No signal.
+      factors.push(`shared-origin-skip:${a.bridge_origin_wallet.slice(0, 8)}…(fanout)`);
+    } else if (originBucket === "private") {
       s += 0.8;
       factors.push(`same-bridge-origin:${a.bridge_origin_wallet.slice(0, 8)}…`);
     } else if (originBucket === "cex" || originBucket === "swap") {
@@ -129,7 +160,11 @@ function pairwiseScore(a: WalletAgg, b: WalletAgg): PairScore {
     a.first_inflow_from === b.first_inflow_from
   ) {
     const bucket = categoryBucket(a.funding_source);
-    if (bucket === "private") {
+    if (bucket === "private" && getFunderFanout(a.first_inflow_from) > FUNDER_FANOUT_LIMIT) {
+      // High-fanout "private" funder = shared on-ramp/conduit, not a
+      // coordinator (it funds many unrelated proxies). No signal.
+      factors.push(`shared-funder-skip:${a.first_inflow_from.slice(0, 8)}…(fanout)`);
+    } else if (bucket === "private") {
       s += 0.8;
       factors.push(`same-funder:${a.first_inflow_from.slice(0, 8)}…`);
     } else if (bucket === "cex" || bucket === "swap") {
@@ -172,19 +207,9 @@ function pairwiseScore(a: WalletAgg, b: WalletAgg): PairScore {
     }
   }
 
-  // Same dominant side? Skip the factor entirely when either wallet has
-  // no net position on either side (e.g. only-SELLs cancelling earlier buys).
-  // Previously these defaulted to side 0 and inflated false-positive clustering.
-  const aHas = a.net_outcome0_notional > 0 || a.net_outcome1_notional > 0;
-  const bHas = b.net_outcome0_notional > 0 || b.net_outcome1_notional > 0;
-  if (aHas && bHas) {
-    const aSide = a.net_outcome0_notional >= a.net_outcome1_notional ? 0 : 1;
-    const bSide = b.net_outcome0_notional >= b.net_outcome1_notional ? 0 : 1;
-    if (aSide === bSide) {
-      s += 0.3;
-      factors.push(`same-side(${aSide === 0 ? "Yes" : "No"})`);
-    }
-  }
+  // Same-side base contribution (guaranteed by the gate above).
+  s += 0.3;
+  factors.push(`same-side(${aSide === 0 ? "Yes" : "No"})`);
 
   // Similar timing of first significant trade?
   if (Math.abs(a.first_ts - b.first_ts) <= TIME_TOLERANCE_MS) {
@@ -401,11 +426,50 @@ async function detectClusters(eventSlug: string): Promise<DetectResult | null> {
   return { clusters, wallets, pairScoreMap };
 }
 
+const MIN_CURRENT_POSITION_USD = 100; // EOD review: drop members holding < this
+
+/**
+ * Current USD value a wallet still holds on `side` across the event's
+ * conditionIds, via data-api positions. Returns -1 on error/unknown so the
+ * caller does NOT drop a member just because the API hiccuped.
+ */
+async function currentSideValue(
+  wallet: string,
+  condIds: Set<string>,
+  side: 0 | 1,
+): Promise<number> {
+  try {
+    const res = await request(`https://data-api.polymarket.com/positions?user=${wallet}`, {
+      bodyTimeout: 10_000,
+      headersTimeout: 8_000,
+    });
+    if (res.statusCode !== 200) return -1;
+    const arr = (await res.body.json()) as Array<{
+      conditionId?: string; outcome?: string; currentValue?: number; size?: number;
+    }>;
+    let v = 0;
+    for (const p of arr || []) {
+      if (!condIds.has((p.conditionId || "").toLowerCase())) continue;
+      const oc = String(p.outcome || "").toLowerCase();
+      const pSide = oc === "no" ? 1 : oc === "yes" ? 0 : null;
+      if (pSide !== side) continue;
+      v += Number(p.currentValue ?? 0);
+    }
+    return v;
+  } catch {
+    return -1;
+  }
+}
+
 /**
  * On-demand cluster report for the `/cluster <event_slug>` TG command.
- * Lists every detected cluster's member wallets with side / notional /
- * age so the user can actually act on the "cluster exists" fact.
- * Returns a Markdown string (caller sends it).
+ * Lists every detected cluster's member wallets with side / notional / age.
+ *
+ * EOD position re-review (user request): each member's CURRENT position on
+ * its side is re-checked against data-api; members now holding < $100 (sold
+ * out or dust) are dropped before reporting — the 48h-net that built the
+ * cluster can be stale by end of day. A cluster that falls below
+ * MIN_CLUSTER_SIZE after pruning is omitted. API errors never drop a member.
  */
 export async function clusterReport(eventSlug: string): Promise<string> {
   let res: DetectResult | null;
@@ -416,10 +480,9 @@ export async function clusterReport(eventSlug: string): Promise<string> {
   }
   if (!res) return `🔍 no qualifying cluster on \`${eventSlug}\` (need ≥${MIN_CLUSTER_SIZE} linked wallets, each ≥$${MIN_NOTIONAL} in last 48h)`;
 
-  // Keep only clusters with a strong (≥0.8) internal pair, matching the
-  // alert bar, so the report mirrors what would have fired.
   const out: string[] = [`🔗 *Clusters on* \`${eventSlug}\``];
   let shown = 0;
+  let prunedTotal = 0;
   for (const cluster of res.clusters) {
     let maxScore = 0;
     let maxFactors: string[] = [];
@@ -431,25 +494,49 @@ export async function clusterReport(eventSlug: string): Promise<string> {
       }
     }
     if (maxScore < SCORE_PAIR_STRONG) continue;
+
+    // conditionIds spanned by this cluster's trades (for the position check).
+    const condIds = new Set<string>();
+    for (const w of cluster) {
+      for (const t of res.wallets.get(w)?.trades ?? []) {
+        if (t.market) condIds.add(t.market.toLowerCase());
+      }
+    }
+
+    // EOD re-review: keep members still holding >= $100 on their side.
+    const survivors: { agg: WalletAgg; side: 0 | 1; current: number }[] = [];
+    for (const w of cluster) {
+      const agg = res.wallets.get(w)!;
+      const side: 0 | 1 = agg.net_outcome0_notional >= agg.net_outcome1_notional ? 0 : 1;
+      const cur = await currentSideValue(agg.wallet, condIds, side);
+      if (cur === -1 || cur >= MIN_CURRENT_POSITION_USD) {
+        survivors.push({ agg, side, current: cur });
+      } else {
+        prunedTotal++;
+      }
+      await new Promise((r) => setTimeout(r, 80)); // throttle data-api
+    }
+    if (survivors.length < MIN_CLUSTER_SIZE) continue;
+
     shown++;
-    const side0 = cluster.reduce((s, w) => s + (res!.wallets.get(w)?.net_outcome0_notional ?? 0), 0);
-    const side1 = cluster.reduce((s, w) => s + (res!.wallets.get(w)?.net_outcome1_notional ?? 0), 0);
+    const side0 = survivors.reduce((s, m) => s + m.agg.net_outcome0_notional, 0);
+    const side1 = survivors.reduce((s, m) => s + m.agg.net_outcome1_notional, 0);
     const domSide = side0 >= side1 ? "YES" : "NO";
-    const total = cluster.reduce((s, w) => s + (res!.wallets.get(w)?.total_notional ?? 0), 0);
-    out.push(`\n*Cluster ${shown}* — ${cluster.length} wallets · *${domSide}* · $${Math.round(total).toLocaleString("en-US")} · pair ${maxScore.toFixed(2)} (${maxFactors.join(", ")})`);
-    const rows = cluster
-      .map((w) => res!.wallets.get(w)!)
-      .sort((a, b) => b.total_notional - a.total_notional);
-    for (const agg of rows) {
-      const net = agg.net_outcome0_notional - agg.net_outcome1_notional;
-      const wSide = net >= 0 ? "Y" : "N";
-      const amt = Math.abs(net);
+    // Total = sum of current positions where known, else 48h-net fallback.
+    const total = survivors.reduce(
+      (s, m) => s + (m.current >= 0 ? m.current : m.agg.total_notional), 0);
+    out.push(`\n*Cluster ${shown}* — ${survivors.length} wallets · *${domSide}* · $${Math.round(total).toLocaleString("en-US")} held · pair ${maxScore.toFixed(2)} (${maxFactors.join(", ")})`);
+    survivors.sort((a, b) => (b.current >= 0 ? b.current : b.agg.total_notional) - (a.current >= 0 ? a.current : a.agg.total_notional));
+    for (const { agg, side, current } of survivors) {
+      const wSide = side === 0 ? "Y" : "N";
+      const amt = current >= 0 ? current : Math.abs(agg.net_outcome0_notional - agg.net_outcome1_notional);
       const age = agg.age_days === null ? "no-inflow" : `${agg.age_days}d`;
       const fund = agg.funding_source ? ` · ${agg.funding_source}` : "";
       out.push(`• [${agg.wallet.slice(0, 6)}…${agg.wallet.slice(-4)}](https://polygonscan.com/address/${agg.wallet}) ${wSide} $${Math.round(amt).toLocaleString("en-US")} · ${age}${fund}`);
     }
   }
-  if (shown === 0) return `🔍 linked wallets found on \`${eventSlug}\` but none meet the strong-pair bar (≥${SCORE_PAIR_STRONG})`;
+  if (shown === 0) return `🔍 linked wallets on \`${eventSlug}\` but none survive (strong-pair ≥${SCORE_PAIR_STRONG} + ≥${MIN_CLUSTER_SIZE} members still holding ≥$${MIN_CURRENT_POSITION_USD})`;
+  if (prunedTotal > 0) out.push(`\n_(${prunedTotal} member(s) pruned: sold out / < $${MIN_CURRENT_POSITION_USD})_`);
   return out.join("\n");
 }
 
