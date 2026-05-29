@@ -25,36 +25,80 @@ interface RelayRequest {
   recipient: string;
   data: {
     inTxs?: { hash?: string; chainId?: number; type?: string }[];
-    metadata?: { sender?: string; recipient?: string };
+    metadata?: {
+      sender?: string;
+      recipient?: string;
+      originChainId?: number;
+      currencyIn?: { amountUsd?: string | number };
+    };
   };
   createdAt: string;
 }
 
+/** Min USD size for a Relay leg to count as real funding — below this it's
+ *  solver-fill noise (a wallet that is itself a Relay solver receives dozens
+ *  of tiny diverse-currency fills/sec; those must not be read as funding). */
+const MIN_FUNDING_USD = 1000;
+
+function relayAmountUsd(r: RelayRequest): number {
+  const v = r.data?.metadata?.currencyIn?.amountUsd;
+  const n = typeof v === "string" ? parseFloat(v) : typeof v === "number" ? v : 0;
+  return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * Resolve a wallet's Relay funding origin. Queries BOTH directions:
+ *   recipient=<w> — someone bridged INTO this wallet; origin = request.user
+ *   user=<w>      — this wallet INITIATED a deposit; funder = metadata.sender
+ * The `user=` direction is essential: a wallet that funds its own Polymarket
+ * position via Relay (the standard deposit rail) has NO inbound `recipient=`
+ * legs except solver noise. Sub-$1k legs are dropped as solver/dust noise.
+ * Picks the EARLIEST qualifying (>= $1k) leg across both directions.
+ */
 async function fetchEarliestRelayOrigin(
-  recipientWallet: string,
+  wallet: string,
   limit = 50,
 ): Promise<BridgeOrigin | null> {
-  const url = `${RELAY_BASE}/requests?recipient=${recipientWallet}&limit=${limit}`;
-  try {
-    const res = await request(url, { bodyTimeout: 15_000, headersTimeout: 10_000 });
-    if (res.statusCode !== 200) return null;
-    const data = (await res.body.json()) as { requests?: RelayRequest[] };
-    const reqs = data.requests ?? [];
-    if (reqs.length === 0) return null;
-    reqs.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
-    const earliest = reqs[0];
-    const user = (earliest.user || earliest.data?.metadata?.sender || "").toLowerCase();
-    if (!user || user === "0x0000000000000000000000000000000000000000") return null;
-    return {
-      user,
-      chain_id: earliest.data.inTxs?.[0]?.chainId ?? null,
-      first_seen_iso: earliest.createdAt,
-      bridge: "relay",
-    };
-  } catch (e) {
-    err("bridge-tracer", `relay lookup failed for ${recipientWallet}`, (e as Error).message);
-    return null;
+  const w = wallet.toLowerCase();
+  const ZERO = "0x0000000000000000000000000000000000000000";
+
+  async function pull(dir: "recipient" | "user"): Promise<BridgeOrigin | null> {
+    const url = `${RELAY_BASE}/requests?${dir}=${w}&limit=${limit}`;
+    try {
+      const res = await request(url, { bodyTimeout: 15_000, headersTimeout: 10_000 });
+      if (res.statusCode !== 200) return null;
+      const data = (await res.body.json()) as { requests?: RelayRequest[] };
+      const reqs = (data.requests ?? []).filter((r) => relayAmountUsd(r) >= MIN_FUNDING_USD);
+      if (reqs.length === 0) return null;
+      reqs.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+      for (const r of reqs) {
+        // recipient-dir: the bridge initiator (request.user) is the origin.
+        // user-dir: the wallet itself initiated, so the FUNDER (who supplied
+        // the input funds = metadata.sender) is the meaningful origin.
+        const originRaw = dir === "recipient"
+          ? (r.user || r.data?.metadata?.sender)
+          : (r.data?.metadata?.sender || r.user);
+        const origin = (originRaw || "").toLowerCase();
+        if (!origin || origin === ZERO || origin === w) continue;
+        return {
+          user: origin,
+          chain_id: r.data?.metadata?.originChainId ?? r.data.inTxs?.[0]?.chainId ?? null,
+          first_seen_iso: r.createdAt,
+          bridge: "relay",
+        };
+      }
+      return null;
+    } catch (e) {
+      err("bridge-tracer", `relay ${dir} lookup failed for ${w}`, (e as Error).message);
+      return null;
+    }
   }
+
+  const [recip, init] = await Promise.all([pull("recipient"), pull("user")]);
+  if (recip && init) {
+    return Date.parse(recip.first_seen_iso) <= Date.parse(init.first_seen_iso) ? recip : init;
+  }
+  return recip || init;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -192,6 +236,9 @@ const CHAIN_NAMES: Record<number, string> = {
   8453: "base",
   42161: "arbitrum",
   43114: "avalanche",
+  // Relay's synthetic IDs for non-EVM chains (seen in request metadata).
+  792703809: "solana",
+  728126428: "tron",
 };
 
 export function chainName(id: number | null): string {

@@ -14,7 +14,14 @@ const MEANINGFUL_USDC = 1000; // $1k+ inflow threshold
 // USDC contracts on Polygon mainnet.
 const USDC_E = "0x2791bca1f2de4661ed88a30c99a7a9449aa84174"; // bridged USDC (used by Polymarket)
 const USDC_NATIVE = "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359"; // native USDC (Circle)
-const USDC_CONTRACTS = [USDC_E, USDC_NATIVE];
+// pUSD — Polymarket's collateral token. Deposits route through Relay and
+// the meaningful balance lands as pUSD, NOT as a plain USDC.e transfer.
+// Scanning only USDC/USDC.e made every Relay/pUSD-funded wallet look like
+// it had zero inflow → false "hidden funding" (path B) alerts. Verified
+// 2026-05-29: 0x0f02… (real $2.3M actor) received 8 pUSD inflows and zero
+// USDC.e, so the profiler saw inflow_count=0 and mis-flagged it.
+const PUSD = "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb";
+const USDC_CONTRACTS = [USDC_E, USDC_NATIVE, PUSD];
 
 export interface WalletProfile {
   wallet: string;
