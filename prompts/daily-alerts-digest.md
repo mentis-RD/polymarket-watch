@@ -113,7 +113,33 @@ list is mostly noise without them.
     wallet may still appear in a theme section if its single position is
     notable, but never as a "repeating participant".
 
-=== STEP 3: group by THEME ===
+=== STEP 2.6: MULTI-DAY ACCUMULATION (cross-day persistence) ===
+
+A wallet that keeps hitting the SAME event + SAME side on multiple days
+within a week is ADDING to a conviction position — a stronger signal than
+a one-day spike. Detect and badge it.
+
+State file: `state/digest_wallet_history.json`, keyed by
+`<wallet>:<event_slug>:<YES|NO>` → { "days": { "<YYYY-MM-DD>": <end-of-day
+cost basis that day> } }. Load it at start (empty object if absent).
+
+For each fresh-wallet alert that SURVIVED the 2.5 filters:
+1. key = `<wallet>:<event_slug>:<side>`; today = the digest date.
+2. Look at history[key].days, drop any date older than 7 days.
+3. priorDays = the remaining dates that are NOT today.
+4. Record today: history[key].days[today] = end-of-day cost basis (from
+   the 2.6 reconcile). Save the file back at the very end (after send).
+5. If priorDays is non-empty → this is an ADDER:
+   - badge the line `🔁 добирает Nд` where N = total distinct days
+     (priorDays + today), e.g. 3д.
+   - cumulative buy = the CURRENT end-of-day cost basis (it already sums
+     every add — that IS the summary buy across the days). Show it as the
+     main amount, and append the day-progression of cost bases when it
+     fits, e.g. `($97k→$1.2M→$2.3M)`.
+   - adders are high-conviction: sort them to the TOP of their theme.
+
+Prune: after updating, drop any history key whose every day is >7d old so
+the file doesn't grow unbounded.
 
 Cluster events by inferred topic from titles + slugs. Heuristics:
 - iran|israel|hezbollah|hormuz|gaza         → 🇮🇷 Iran / Middle East
@@ -150,6 +176,7 @@ _<YYYY-MM-DD> 09:00 Europe/Berlin_
 • 🔥 [Iran ceasefire continues through](https://polymarket.com/event/iran-...) — coord-cluster 37 wallets · *NO* $124k
 • 🚨 [Israel-Iran peace deal by](https://polymarket.com/event/israel-...) — fresh-wallet [0xab12…cd34](https://polygonscan.com/address/0xfull) *NO* $16k (hidden funding, score 1)
 • 🚨 📈 scaled in [US x Iran peace deal](https://polymarket.com/event/us-x-iran-...) — fresh-wallet [0x0f02…5bfb](https://polygonscan.com/address/0xfull) *NO* $2.3M (hidden funding, score 1)   ← end-of-day cost basis, not the $97.6k alert snapshot
+• 🚨 🔁 добирает 3д [Iran regime falls](https://polymarket.com/event/iran-...) — fresh-wallet [0x9a01…77bc](https://polygonscan.com/address/0xfull) *YES* $840k ($120k→$410k→$840k) · via coinbase   ← same wallet+side hit 3 days running this week
 • 📈 [Strait of Hormuz traffic returns by end of May](https://polymarket.com/event/strait-...) — vol-spike 12.3× · 78% *NO*
 • ...
 
