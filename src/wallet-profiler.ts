@@ -156,7 +156,7 @@ async function fetchEarliestUsdcInflow(wallet: string): Promise<AssetTransfer | 
  *  conduit → we trace ONE more hop to the exchange behind it. Older than
  *  this, the funder is an established wallet whose own identity is signal
  *  and must NOT be collapsed away. */
-const FRESH_FUNDER_DAYS = 14;
+export const FRESH_FUNDER_DAYS = 14;
 
 /**
  * Scan a funder wallet's USDC/pUSD inflows for the first transfer from a

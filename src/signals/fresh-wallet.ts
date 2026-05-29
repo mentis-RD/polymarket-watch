@@ -3,6 +3,7 @@ import { getProfile, type WalletProfile } from "../wallet-profiler.js";
 import { canAlert, markAlerted } from "../alert-cooldown.js";
 import { sendMessage } from "../telegram.js";
 import { eventLink, walletLink, fmtMoney, sideLabel, shortDate, EXTREME_PRICE_HIGH } from "../alert-format.js";
+import { FRESH_FUNDER_DAYS } from "../wallet-profiler.js";
 import { escapeMd } from "../markdown.js";
 import { log } from "../log.js";
 
@@ -179,14 +180,23 @@ async function fireAlert(
   const brand = (c: string | null) => (c ? escapeMd(c.split(":")[1] || c) : null);
   let fundingTxt: string | null = null;
   const originBrand = brand(profile.bridge_origin_funding_source);
+  const fAge = profile.funder_age_days;
   if (originBrand && profile.funder_is_conduit) {
     fundingTxt = `💰 via *${originBrand}* (one-time conduit)`;
   } else if (originBrand) {
     fundingTxt = `💰 via *${originBrand}*`;
   } else if (profile.bridge_origin_wallet) {
-    const age = profile.funder_age_days;
-    const aged = age !== null ? ` · aged ${age}d ⚠️ established` : "";
-    fundingTxt = `💰 funder ${walletLink(profile.bridge_origin_wallet)}${aged}`;
+    // Unknown funder. Only call it "established" when it is genuinely aged;
+    // a young-but-unresolved funder is a conduit whose exchange we couldn't
+    // pin (dict gap or non-Polygon funding), not an established actor.
+    const link = walletLink(profile.bridge_origin_wallet);
+    if (fAge !== null && fAge >= FRESH_FUNDER_DAYS) {
+      fundingTxt = `💰 funder ${link} · aged ${fAge}d ⚠️ established (watch)`;
+    } else if (fAge !== null) {
+      fundingTxt = `💰 funder ${link} · ${fAge}d (conduit, exchange unresolved)`;
+    } else {
+      fundingTxt = `💰 funder ${link}`;
+    }
   } else if (profile.funding_source) {
     fundingTxt = `💰 via *${brand(profile.funding_source)}*`;
   }
