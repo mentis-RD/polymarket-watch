@@ -1,9 +1,20 @@
+import { appendFileSync } from "node:fs";
+import { join } from "node:path";
 import type { TradeEvent } from "../clob-ws.js";
 import { canAlert, markAlerted } from "../alert-cooldown.js";
 import { sendMessage } from "../telegram.js";
 import { escapeMd } from "../markdown.js";
 import { marketLink, fmtMoneyShort, shortDate, EXTREME_PRICE_HIGH } from "../alert-format.js";
 import { log } from "../log.js";
+
+/** Spike-event log the /spikes digest command reads (bot is a separate
+ *  process from market-monitor, so it can't see the in-memory detector). */
+const SPIKES_LOG = join(process.cwd(), "state", "spikes.jsonl");
+export interface SpikeRecord {
+  ts: number; slug: string; question: string; end_date: string;
+  multiple: number; oneSided: boolean; dominantSide: string; sideRatio: number;
+  curVol: number;
+}
 
 const HOUR_MS = 60 * 60 * 1000;
 const BASELINE_HOURS = 168; // 7 days
@@ -164,6 +175,17 @@ export class VolumeSpikeDetector {
       `${fmtMoneyShort(info.curVol)}/hr${sideTxt} · baseline ${fmtMoneyShort(info.baseline)}/hr${endTxt}`,
     ].join("\n");
 
+    // Persist for the on-demand /spikes digest (separate bot process).
+    try {
+      const rec: SpikeRecord = {
+        ts: Date.now(), slug, question: meta?.question || slug,
+        end_date: meta?.end_date || "", multiple: info.multiple,
+        oneSided: info.oneSided, dominantSide: info.dominantSide,
+        sideRatio: info.sideRatio, curVol: info.curVol,
+      };
+      appendFileSync(SPIKES_LOG, JSON.stringify(rec) + "\n");
+    } catch { /* non-fatal */ }
+
     await sendMessage({
       chatId: chat,
       threadId: thread || undefined,
@@ -172,4 +194,88 @@ export class VolumeSpikeDetector {
     });
     log("volume-spike", `alert: ${slug} ${info.multiple.toFixed(1)}x baseline`);
   }
+}
+
+// ── /spikes on-demand 24h digest ─────────────────────────────────────────
+
+const THEMES: { emoji: string; name: string; re: RegExp }[] = [
+  { emoji: "🇮🇷", name: "Iran / Middle East", re: /iran|israel|hezbollah|hormuz|gaza|lebanon|netanyahu/i },
+  { emoji: "🇺🇦", name: "Ukraine / Russia", re: /ukraine|russia|putin|zelensk/i },
+  { emoji: "🗳", name: "Politics", re: /primary|nominee|midterm|governor|senate|congress|election|trump|biden|powell/i },
+  { emoji: "🚀", name: "Crypto launches", re: /token|airdrop|ipo-by|fdv|launch/i },
+  { emoji: "₿", name: "Crypto markets", re: /bitcoin|ethereum|btc-|eth-|stablecoin|solana|crypto/i },
+  { emoji: "📈", name: "Equity / macro", re: /aapl|msft|nvda|googl|tsla|amzn|meta|pltr|fed|gdp|cpi|company/i },
+  { emoji: "📦", name: "Прочее", re: /.*/ },
+];
+
+function themeFor(slug: string, title: string): { emoji: string; name: string } {
+  const hay = `${slug} ${title}`;
+  for (const t of THEMES) if (t.re.test(hay)) return { emoji: t.emoji, name: t.name };
+  return THEMES[THEMES.length - 1];
+}
+
+/**
+ * On-demand digest of the last 24h of volume-spikes, same themed shape as
+ * the daily alerts digest. Deduped by slug (peak multiplier). Titles
+ * resolved via Gamma (cached per slug). Returns Markdown.
+ */
+export async function spikeDigest24h(): Promise<string> {
+  const { readFileSync, existsSync } = await import("node:fs");
+  if (!existsSync(SPIKES_LOG)) return "📈 *Volume spikes · 24h*\n\n_нет данных_";
+  const since = Date.now() - 24 * 60 * 60 * 1000;
+  // Dedupe by slug → peak record.
+  const peak = new Map<string, SpikeRecord>();
+  for (const line of readFileSync(SPIKES_LOG, "utf-8").split("\n")) {
+    if (!line) continue;
+    let r: SpikeRecord;
+    try { r = JSON.parse(line) as SpikeRecord; } catch { continue; }
+    if (r.ts < since) continue;
+    const cur = peak.get(r.slug);
+    if (!cur || r.multiple > cur.multiple) peak.set(r.slug, r);
+  }
+  const recs = [...peak.values()];
+  if (recs.length === 0) return "📈 *Volume spikes · 24h*\n\n_тихо — спайков нет_";
+
+  // Resolve titles via Gamma (best-effort, cached).
+  const { request } = await import("undici");
+  const titleCache = new Map<string, string>();
+  for (const r of recs) {
+    if (r.question && r.question !== r.slug) { titleCache.set(r.slug, r.question); continue; }
+    try {
+      const res = await request(`https://gamma-api.polymarket.com/events?slug=${r.slug}`, { bodyTimeout: 8000, headersTimeout: 6000 });
+      if (res.statusCode === 200) {
+        const arr = (await res.body.json()) as Array<{ title?: string }>;
+        if (arr?.[0]?.title) titleCache.set(r.slug, arr[0].title);
+      }
+    } catch { /* keep slug */ }
+    await new Promise((x) => setTimeout(x, 150));
+  }
+
+  // Group by theme.
+  const groups = new Map<string, { emoji: string; name: string; items: SpikeRecord[] }>();
+  for (const r of recs) {
+    const title = titleCache.get(r.slug) || r.slug;
+    const th = themeFor(r.slug, title);
+    const g = groups.get(th.name) ?? { emoji: th.emoji, name: th.name, items: [] };
+    g.items.push(r);
+    groups.set(th.name, g);
+  }
+
+  const out: string[] = ["📈 *Volume spikes · 24h*"];
+  // Themes ordered by total peak-multiplier desc.
+  const ordered = [...groups.values()].sort(
+    (a, b) => b.items.reduce((s, r) => s + r.multiple, 0) - a.items.reduce((s, r) => s + r.multiple, 0),
+  );
+  for (const g of ordered) {
+    g.items.sort((a, b) => b.multiple - a.multiple);
+    out.push(`\n*${g.emoji} ${g.name}* (${g.items.length})`);
+    for (const r of g.items.slice(0, 10)) {
+      const title = titleCache.get(r.slug) || r.slug;
+      const side = r.oneSided ? ` · ${Math.round(r.sideRatio * 100)}% *${r.dominantSide.toUpperCase()}*` : "";
+      out.push(`• ${marketLink(r.slug, escapeMd(title))} — *${r.multiple.toFixed(1)}×*${side}`);
+    }
+    if (g.items.length > 10) out.push(`_…и ещё ${g.items.length - 10}_`);
+  }
+  out.push(`\n_Всего: ${recs.length} рынков_`);
+  return out.join("\n");
 }

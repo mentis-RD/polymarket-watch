@@ -7,16 +7,16 @@ the pipeline in the last 24h, then post to the daily-digest TG thread.
 
 === STEP 1: gather alerts ===
 
-The 5 signal types live across 2 processes. Pull 24h of alert log lines:
+Pull 24h of alert log lines (cluster + cross-market + fresh-wallet):
 
 ```
 pm2 logs pmw-trade-enricher --nostream --lines 30000 2>&1 \
   | grep -E '\[(cluster|cross-market|fresh-wallet)\] alert' > /tmp/alerts_te.log
-pm2 logs pmw-market-monitor --nostream --lines 30000 2>&1 \
-  | grep '\[volume-spike\] alert' > /tmp/alerts_mm.log
 ```
 
 Smart-money cross-link (xlink) is intentionally disabled — skip.
+Volume-spike is NOT in this digest — it has its own on-demand command
+`/spikes` (24h themed spike digest). Do not gather or list spikes here.
 
 Parse the ISO timestamp at the start of each line, drop anything older
 than 24h. If total fired < 5 → send "тихий день — N сигналов" + bullets
@@ -32,7 +32,6 @@ Per signal-type, extract from log line:
   buttons are reserved for clusters, this is the cross-market equivalent)
 - fresh-wallet:  `alert: <wallet> on event <event_slug> net=$<N> score=<S> path=<A|B>`
                  (path A = score-based, B = hidden-funding)
-- volume-spike:  `alert: <slug> <multiplier>x baseline`
 
 CLUSTER RE-REVIEW (mandatory — the `cluster=N` count in the log is the
 detection-time count and is STALE by morning). For each UNIQUE cluster
@@ -51,12 +50,6 @@ cd /root/polymarket-watch && npx tsx src/cluster-cli.ts <event_slug>
   yield multiple sub-clusters; take the largest.
 This is throttled (it queries positions per member); expect a few seconds
 per cluster event. Only re-review cluster events, not every alert.
-
-VOLUME-SPIKE DEDUP: a sustained spike re-fires hourly (cooldown is keyed
-per hour-bucket), so the same slug can appear many times in 24h. DEDUP
-volume-spike alerts by slug — show each market ONCE, using its PEAK
-multiplier that day (e.g. "49.9×"). Count distinct spiking markets, not
-raw fires, in the total.
 
 Resolve event_slug → human title via Gamma (cache per unique slug, 200ms
 throttle):
@@ -179,7 +172,7 @@ Cluster events by inferred topic from titles + slugs. Heuristics:
 - everything else                            → 📦 Прочее
 
 Within a theme, sort by notional desc (where comparable), else by signal
-weight cluster > fresh-wallet > cross-market > volume-spike.
+weight cluster > fresh-wallet > cross-market.
 
 === STEP 4: cross-reference wallets ===
 
@@ -204,7 +197,6 @@ _<YYYY-MM-DD> 09:00 Europe/Berlin_
 • 🚨 [Israel-Iran peace deal by](https://polymarket.com/event/israel-...) — fresh-wallet [0xab12…cd34](https://polygonscan.com/address/0xfull) *NO* $16k (hidden funding, score 1)
 • 🚨 📈 scaled in [US x Iran peace deal](https://polymarket.com/event/us-x-iran-...) — fresh-wallet [0x0f02…5bfb](https://polygonscan.com/address/0xfull) *NO* $2.3M (hidden funding, score 1)   ← end-of-day cost basis, not the $97.6k alert snapshot
 • 🚨 🔁 добирает 3д [Iran regime falls](https://polymarket.com/event/iran-...) — fresh-wallet [0x9a01…77bc](https://polygonscan.com/address/0xfull) *YES* $840k ($120k→$410k→$840k) · via coinbase   ← same wallet+side hit 3 days running this week
-• 📈 [Strait of Hormuz traffic returns by end of May](https://polymarket.com/event/strait-...) — vol-spike 12.3× · 78% *NO*
 • ...
 
 *🗳 Politics* (5)
@@ -217,7 +209,7 @@ _<YYYY-MM-DD> 09:00 Europe/Berlin_
 • [0xab12…cd34](https://polygonscan.com/address/0xfull) — fresh-wallet (iran-leader-2026) + cross-market (3 events: ...)
 • ...
 
-*Всего:* freshwallet=N · cluster=M · xmarket=K · volspike=L
+*Всего:* freshwallet=N · cluster=M · xmarket=K
 _отсеяно: exited N · extreme-price N · est-wallet N · decayed-clusters N_
 _суммы fresh-wallet = позиция на конец дня (cost basis), не снапшот алерта_
 ```

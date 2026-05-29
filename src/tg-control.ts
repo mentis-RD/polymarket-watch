@@ -10,6 +10,7 @@ import { sendMessage, sendMessageReturningId, deleteMessage, setMyCommands } fro
 import { isSkippedCategoryEvent } from "./category-filter.js";
 import { clusterReport } from "./signals/coordinated-cluster.js";
 import { crossMarketReport } from "./signals/cross-market-correlation.js";
+import { spikeDigest24h } from "./signals/volume-spike.js";
 import { heartbeat } from "./heartbeat.js";
 import { writeAtomic } from "./atomic-write.js";
 import { escapeMd } from "./markdown.js";
@@ -122,13 +123,27 @@ async function handleCallback(cq: NonNullable<TGUpdate["callback_query"]>): Prom
   });
 }
 
-async function reply(msg: TGMessage, text: string): Promise<void> {
-  await sendMessage({
+const CMD_TTL_MS = 60 * 60 * 1000; // command replies auto-delete after 1h
+
+/** Schedule deletion of a message after `ttlMs`. setTimeout in-process —
+ *  if the bot restarts before firing, the message simply persists (rare). */
+function scheduleDelete(chatId: string, messageId: number, ttlMs: number): void {
+  setTimeout(() => { void deleteMessage(chatId, messageId); }, ttlMs);
+}
+
+/**
+ * Reply to a command. By default the reply auto-deletes after 1h (`ttlMs`);
+ * the dispatcher deletes the triggering command message on the same clock.
+ * Pass ttlMs=0 to keep the reply permanently (e.g. /spikes digest).
+ */
+async function reply(msg: TGMessage, text: string, ttlMs: number = CMD_TTL_MS): Promise<void> {
+  const id = await sendMessageReturningId({
     chatId: String(msg.chat.id),
     threadId: msg.message_thread_id ? String(msg.message_thread_id) : undefined,
     text,
     parseMode: "Markdown",
   });
+  if (id && ttlMs > 0) scheduleDelete(String(msg.chat.id), id, ttlMs);
 }
 
 function parseCommand(text: string): { cmd: string; args: string[] } | null {
@@ -429,6 +444,24 @@ async function handleXmarket(msg: TGMessage, args: string[]): Promise<void> {
   await reply(msg, report);
 }
 
+/**
+ * /spikes (alias /spikedigest) — on-demand 24h volume-spike digest in the
+ * same themed format as the daily alerts digest. Volume-spike was removed
+ * from the daily digest; this is its dedicated surface. The reply does NOT
+ * auto-delete (ttlMs handled by sending permanently); the command message
+ * is deleted immediately by the dispatcher.
+ */
+async function handleSpikes(msg: TGMessage): Promise<void> {
+  const report = await spikeDigest24h();
+  // Permanent reply (no TTL) — send directly, not via the 1h-default reply().
+  await sendMessage({
+    chatId: String(msg.chat.id),
+    threadId: msg.message_thread_id ? String(msg.message_thread_id) : undefined,
+    text: report,
+    parseMode: "Markdown",
+  });
+}
+
 async function handleHelp(msg: TGMessage): Promise<void> {
   await reply(
     msg,
@@ -710,6 +743,10 @@ async function handleMessage(msg: TGMessage): Promise<void> {
       case "xm":
         await handleXmarket(msg, parsed.args);
         break;
+      case "spikes":
+      case "spikedigest":
+        await handleSpikes(msg);
+        break;
       case "profile":
         await handleProfile(msg, parsed.args);
         break;
@@ -728,6 +765,19 @@ async function handleMessage(msg: TGMessage): Promise<void> {
   } catch (e) {
     err("tg-control", `command ${parsed.cmd} failed`, e);
     await reply(msg, `⚠️ command failed: ${(e as Error).message}`);
+  }
+
+  // Auto-delete the triggering COMMAND message.
+  // - watch_digest manages its own 60s cleanup (incl. the command msg) → skip.
+  // - spikes: delete the command msg immediately (its digest reply persists).
+  // - everything else: delete on the 1h clock, matching the reply TTL.
+  const chatId = String(msg.chat.id);
+  if (parsed.cmd === "watch_digest" || parsed.cmd === "watchdigest") {
+    // handled internally
+  } else if (parsed.cmd === "spikes" || parsed.cmd === "spikedigest") {
+    void deleteMessage(chatId, msg.message_id);
+  } else {
+    scheduleDelete(chatId, msg.message_id, CMD_TTL_MS);
   }
 }
 
@@ -822,6 +872,7 @@ void setMyCommands([
   { command: "watch_digest", description: "bulk-add all events from last 24h digest" },
   { command: "cluster", description: "show coordinated-cluster wallets: /cluster <slug>" },
   { command: "xmarket", description: "show cross-market wallet's correlated markets: /xmarket <0xwallet>" },
+  { command: "spikes", description: "24h volume-spike digest (themed)" },
   { command: "profile", description: "wallet profile: /profile <0xwallet>" },
   { command: "scan_unknowns", description: "scan watchlist for fresh wallets with hidden funding" },
   { command: "help", description: "show help" },
