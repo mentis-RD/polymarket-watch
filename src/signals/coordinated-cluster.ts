@@ -132,6 +132,10 @@ function pairwiseScore(a: WalletAgg, b: WalletAgg): PairScore {
     return { score: 0, factors: [], identity: false };
   }
   let identity = false;
+  // The zero address is never a funder — it's the pUSD mint source on
+  // Polymarket deposits, so MANY unrelated wallets share it as
+  // first_inflow_from. Must not create identity links.
+  const ZERO = "0x0000000000000000000000000000000000000000";
 
   // Phase 6b: same true origin on source chain (after Relay tracing).
   // Critical: only fire if the origin itself is a private wallet, not a
@@ -140,7 +144,8 @@ function pairwiseScore(a: WalletAgg, b: WalletAgg): PairScore {
   if (
     a.bridge_origin_wallet &&
     b.bridge_origin_wallet &&
-    a.bridge_origin_wallet === b.bridge_origin_wallet
+    a.bridge_origin_wallet === b.bridge_origin_wallet &&
+    a.bridge_origin_wallet !== ZERO
   ) {
     const originBucket = categoryBucket(a.bridge_origin_funding_source);
     if (originBucket === "private" && getFunderFanout(a.bridge_origin_wallet) > FUNDER_FANOUT_LIMIT) {
@@ -168,7 +173,8 @@ function pairwiseScore(a: WalletAgg, b: WalletAgg): PairScore {
   if (
     a.first_inflow_from &&
     b.first_inflow_from &&
-    a.first_inflow_from === b.first_inflow_from
+    a.first_inflow_from === b.first_inflow_from &&
+    a.first_inflow_from !== ZERO
   ) {
     const bucket = categoryBucket(a.funding_source);
     if (bucket === "private" && getFunderFanout(a.first_inflow_from) > FUNDER_FANOUT_LIMIT) {
