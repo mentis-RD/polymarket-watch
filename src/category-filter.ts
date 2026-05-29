@@ -270,7 +270,7 @@ const SKIP_SLUG_RES: RegExp[] = [
   //    Grande's `petal` album) where label insiders CAN have leaks.
   /^billboard-(?:200|hot-100|\d+-artist)/i,
   /^how-many-(?:spots|weeks|albums|songs).*billboard/i,
-  /-first-week-album-sales(?:-|$)/i,
+  /-week-album-sales(?:-|$)/i,
   /^\d+-song-on-(?:us-)?spotify-this-week-/i,
   /^(?:top|\d+)-spotify-artist-/i,
   /^which-artists-will-have-(?:a-billboard-)?\d+-(?:hits?|songs?|albums?)/i,
@@ -330,7 +330,7 @@ const SKIP_SLUG_RES: RegExp[] = [
   /-vs-[a-z][a-z-]+-higher-valuation-on-/i,
   // 16) "Nth largest private company end-of-<month>" rankings — auto-poll
   //     across the NPM universe, same data source as rule 14.
-  /^(?:\d+(?:st|nd|rd|th)-)?largest-private-company-end-of-/i,
+  /^(?:\d+(?:st|nd|rd|th)-)?largest-(?:private-)?company-end-of-/i,
   // 17) Index hit-by-month brackets — "spx-hit-jun-2026" with sub-markets
   //     "spx-hit-7450-high-jun-2026-..." and "will-sp-500-spx-hit-N-high-in-
   //     june". Monthly index target polling, same shape as equity weekly
@@ -630,6 +630,17 @@ const SKIP_SLUG_RES: RegExp[] = [
   /^who-will-win-(?:the-)?(?:\d{4}-)?(?:democratic|republican|gop|dem|primary|general|election|senate|house|governor)/i,
   /^who-will-place-first-/i,
   /^will-(?:democrats|republicans|gop|dem|dnc|rnc|the-democrats|the-republicans)-(?:win|lose|gain|hold|sweep|keep|flip)-/i,
+  // === RULE 60: leaks found via volume-spike review 2026-05-29 ===
+  // Monthly precipitation/rainfall weather brackets (companion to the
+  // daily-temperature tag-skip): "precipitation-in-hong-kong-in-may".
+  /^(?:precipitation|rainfall|snowfall|rain|snow)-in-[a-z][a-z-]+-in-(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i,
+  // Multi-asset performance-race brackets: "bitcoin-vs-gold-vs-sp-500-in-2026".
+  // Public price race, no edge. Anchored to an asset token + in-<year> so it
+  // doesn't touch X-vs-Y valuation (rule 24) or election X-vs-Y.
+  /^(?:bitcoin|btc|ethereum|eth|solana|sol|gold|silver|sp-?500|nasdaq|ndx|dow)-vs-[a-z0-9-]+-(?:vs-[a-z0-9-]+-)*in-\d{4}/i,
+  // Trump categorical-action daily brackets the rule-47 shape missed:
+  // "will-trump-publicly-insult-someone-on-312".
+  /^will-trump-(?:publicly-)?(?:insult|praise|attack|mock|compliment)-(?:someone|anyone|a-)/i,
 ];
 
 export function isSkippedSlug(slug: string): boolean {

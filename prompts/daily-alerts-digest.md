@@ -49,6 +49,12 @@ cd /root/polymarket-watch && npx tsx src/cluster-cli.ts <event_slug>
 This is throttled (it queries positions per member); expect a few seconds
 per cluster event. Only re-review cluster events, not every alert.
 
+VOLUME-SPIKE DEDUP: a sustained spike re-fires hourly (cooldown is keyed
+per hour-bucket), so the same slug can appear many times in 24h. DEDUP
+volume-spike alerts by slug — show each market ONCE, using its PEAK
+multiplier that day (e.g. "49.9×"). Count distinct spiking markets, not
+raw fires, in the total.
+
 Resolve event_slug → human title via Gamma (cache per unique slug, 200ms
 throttle):
 ```
