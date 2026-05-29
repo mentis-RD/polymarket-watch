@@ -27,6 +27,9 @@ and exit.
 Per signal-type, extract from log line:
 - cluster:       `alert: <event_slug> cluster=<N>`
 - cross-market:  `alert: <wallet> <N> markets, $<notional>`
+  (append `→ /xmarket <wallet>` to each cross-market line so the user can
+  drill into the wallet's correlated markets + positions; the inline
+  buttons are reserved for clusters, this is the cross-market equivalent)
 - fresh-wallet:  `alert: <wallet> on event <event_slug> net=$<N> score=<S> path=<A|B>`
                  (path A = score-based, B = hidden-funding)
 - volume-spike:  `alert: <slug> <multiplier>x baseline`

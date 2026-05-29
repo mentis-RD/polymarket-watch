@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { sendMessage, sendMessageReturningId, deleteMessage, setMyCommands } from "./telegram.js";
 import { isSkippedCategoryEvent } from "./category-filter.js";
 import { clusterReport } from "./signals/coordinated-cluster.js";
+import { crossMarketReport } from "./signals/cross-market-correlation.js";
 import { heartbeat } from "./heartbeat.js";
 import { writeAtomic } from "./atomic-write.js";
 import { escapeMd } from "./markdown.js";
@@ -100,12 +101,19 @@ async function answerCallback(callbackId: string, text?: string): Promise<void> 
  */
 async function handleCallback(cq: NonNullable<TGUpdate["callback_query"]>): Promise<void> {
   const data = cq.data || "";
-  await answerCallback(cq.id, "scanning cluster…");
-  if (!data.startsWith("c:")) return;
-  const eventSlug = data.slice(2);
   const m = cq.message;
-  if (!m) return;
-  const report = await clusterReport(eventSlug);
+  if (!m) { await answerCallback(cq.id); return; }
+  let report: string | null = null;
+  if (data.startsWith("c:")) {
+    await answerCallback(cq.id, "scanning cluster…");
+    report = await clusterReport(data.slice(2));
+  } else if (data.startsWith("x:")) {
+    await answerCallback(cq.id, "scanning cross-market…");
+    report = await crossMarketReport(data.slice(2).toLowerCase());
+  } else {
+    await answerCallback(cq.id);
+    return;
+  }
   await sendMessage({
     chatId: String(m.chat.id),
     threadId: m.message_thread_id ? String(m.message_thread_id) : undefined,
@@ -405,6 +413,22 @@ async function handleCluster(msg: TGMessage, args: string[]): Promise<void> {
   await reply(msg, report);
 }
 
+/**
+ * /xmarket <wallet> (alias /xm) — drill into a cross-market correlation
+ * alert: lists the wallet's keyword-correlated markets with side / current
+ * held position. The digest's inline buttons are reserved for clusters
+ * (callback `c:`), so cross-market drill-down is this text command (paste
+ * the wallet address from the alert) — also wired as callback `x:`.
+ */
+async function handleXmarket(msg: TGMessage, args: string[]): Promise<void> {
+  if (args.length === 0 || !isAddress(args[0])) {
+    await reply(msg, "usage: `/xmarket <0xwallet>`\n_paste the wallet from a cross-market alert_");
+    return;
+  }
+  const report = await crossMarketReport(args[0].toLowerCase());
+  await reply(msg, report);
+}
+
 async function handleHelp(msg: TGMessage): Promise<void> {
   await reply(
     msg,
@@ -682,6 +706,10 @@ async function handleMessage(msg: TGMessage): Promise<void> {
       case "cluster":
         await handleCluster(msg, parsed.args);
         break;
+      case "xmarket":
+      case "xm":
+        await handleXmarket(msg, parsed.args);
+        break;
       case "profile":
         await handleProfile(msg, parsed.args);
         break;
@@ -793,6 +821,7 @@ void setMyCommands([
   { command: "wl", description: "list current watchlist" },
   { command: "watch_digest", description: "bulk-add all events from last 24h digest" },
   { command: "cluster", description: "show coordinated-cluster wallets: /cluster <slug>" },
+  { command: "xmarket", description: "show cross-market wallet's correlated markets: /xmarket <0xwallet>" },
   { command: "profile", description: "wallet profile: /profile <0xwallet>" },
   { command: "scan_unknowns", description: "scan watchlist for fresh wallets with hidden funding" },
   { command: "help", description: "show help" },

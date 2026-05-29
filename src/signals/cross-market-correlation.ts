@@ -1,3 +1,4 @@
+import { request } from "undici";
 import { canAlert, markAlerted } from "../alert-cooldown.js";
 import { sendMessage } from "../telegram.js";
 import { escapeMd } from "../markdown.js";
@@ -222,6 +223,7 @@ async function fireAlert(wallet: string, cluster: MarketBet[]): Promise<void> {
       const amt = fmtMoney(Math.abs(net));
       return `• ${marketLink(b.slug, `\`${escapeMd(b.slug)}\``)} *${dir}* ${amt}`;
     }),
+    `→ \`/xmarket ${wallet}\``,
   ].join("\n");
 
   await sendMessage({
@@ -235,6 +237,89 @@ async function fireAlert(wallet: string, cluster: MarketBet[]): Promise<void> {
     "cross-market",
     `alert: ${wallet} ${cluster.length} markets, $${dom.notional.toFixed(0)}`,
   );
+}
+
+const MIN_CURRENT_POSITION_USD = 100; // EOD review: drop markets held < this
+
+/** Fetch a wallet's current positions once → conditionId(lower) → {0:yesVal,1:noVal}. */
+async function fetchPositionMap(wallet: string): Promise<Map<string, [number, number]> | null> {
+  try {
+    const res = await request(`https://data-api.polymarket.com/positions?user=${wallet}`, {
+      bodyTimeout: 10_000, headersTimeout: 8_000,
+    });
+    if (res.statusCode !== 200) return null;
+    const arr = (await res.body.json()) as Array<{ conditionId?: string; outcome?: string; currentValue?: number }>;
+    const m = new Map<string, [number, number]>();
+    for (const p of arr || []) {
+      const cid = (p.conditionId || "").toLowerCase();
+      if (!cid) continue;
+      const oc = String(p.outcome || "").toLowerCase();
+      const side = oc === "no" ? 1 : oc === "yes" ? 0 : null;
+      if (side === null) continue;
+      const cur = m.get(cid) ?? [0, 0];
+      cur[side] += Number(p.currentValue ?? 0);
+      m.set(cid, cur);
+    }
+    return m;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * On-demand drill-down for a cross-market alert: `/xmarket <wallet>`.
+ * Re-detects the wallet's keyword-correlated market cluster(s) and lists the
+ * markets with side / CURRENT held position, dominant side, shared keywords.
+ * EOD review: a single data-api positions fetch prunes markets now held
+ * < $100 (sold/dust); cluster dropped if < MIN_CLUSTER_SIZE survive. API
+ * error → no pruning (conservative). Returns Markdown.
+ */
+export async function crossMarketReport(wallet: string): Promise<string> {
+  const w = wallet.toLowerCase();
+  const trades = getRecent(WINDOW_MS).filter((t) => t.wallet.toLowerCase() === w);
+  if (trades.length === 0) return `🔍 no cross-market activity for \`${w.slice(0, 6)}…${w.slice(-4)}\` in last 7d`;
+  const perWallet = aggregatePerWallet(trades);
+  const bets = [...(perWallet.get(w)?.values() ?? [])];
+  const clusters = findKeywordClusters(bets);
+  if (clusters.length === 0) return `🔍 no correlated-market cluster for ${walletLink(w)} (need ≥${MIN_CLUSTER_SIZE} markets sharing ≥${MIN_SHARED_KEYWORDS} keywords)`;
+
+  const positions = await fetchPositionMap(w); // null = unknown → don't prune
+  const out: string[] = [`🔗 *Cross-market for* ${walletLink(w)}`];
+  let shownClusters = 0;
+  let pruned = 0;
+  for (const cluster of clusters) {
+    // EOD review per market: keep where current held on the bet side >= $100.
+    const survivors = cluster.filter((b) => {
+      if (!positions) return true; // unknown
+      const side = b.net_outcome0_notional >= b.net_outcome1_notional ? 0 : 1;
+      const cur = positions.get(b.market.toLowerCase())?.[side] ?? 0;
+      if (cur >= MIN_CURRENT_POSITION_USD) return true;
+      pruned++;
+      return false;
+    });
+    if (survivors.length < MIN_CLUSTER_SIZE) continue;
+    shownClusters++;
+    const dom = dominantSide(survivors);
+    const shared = topSharedKeywords(survivors);
+    const kwTxt = shared.map((k) => `\`${escapeMd(k)}\``).join(", ") || "—";
+    out.push(`\n*${survivors.length} markets · ${sideLabel(dom.side as 0 | 1)} ${Math.round(dom.ratio * 100)}% · ${fmtMoney(dom.notional)}*`);
+    out.push(`keywords: ${kwTxt}`);
+    const rows = survivors
+      .map((b) => {
+        const side = b.net_outcome0_notional >= b.net_outcome1_notional ? 0 : 1;
+        const cur = positions?.get(b.market.toLowerCase())?.[side];
+        const net = Math.abs(b.net_outcome0_notional - b.net_outcome1_notional);
+        const amt = cur !== undefined && cur > 0 ? cur : net;
+        return { b, side, amt };
+      })
+      .sort((a, b) => b.amt - a.amt);
+    for (const { b, side, amt } of rows) {
+      out.push(`• ${marketLink(b.slug, `\`${escapeMd(b.slug)}\``)} *${side === 0 ? "YES" : "NO"}* $${Math.round(amt).toLocaleString("en-US")}`);
+    }
+  }
+  if (shownClusters === 0) return `🔍 cross-market cluster for ${walletLink(w)} decayed — < ${MIN_CLUSTER_SIZE} markets still held ≥$${MIN_CURRENT_POSITION_USD}`;
+  if (pruned > 0) out.push(`\n_(${pruned} market(s) pruned: sold / < $${MIN_CURRENT_POSITION_USD})_`);
+  return out.join("\n");
 }
 
 /**
