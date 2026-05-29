@@ -171,6 +171,26 @@ async function fireAlert(
     ? "🚨 *Fresh wallet — hidden funding*"
     : "🚨 *Fresh wallet*";
 
+  // Funding-origin line: show the exchange when we resolved one (either the
+  // funder is directly a known CEX, or it was a fresh one-time conduit we
+  // traced one hop back to its exchange). When the funder is instead an
+  // ESTABLISHED unknown wallet, surface IT (its age is the signal) rather
+  // than hiding it behind a CEX label.
+  const brand = (c: string | null) => (c ? escapeMd(c.split(":")[1] || c) : null);
+  let fundingTxt: string | null = null;
+  const originBrand = brand(profile.bridge_origin_funding_source);
+  if (originBrand && profile.funder_is_conduit) {
+    fundingTxt = `💰 via *${originBrand}* (one-time conduit)`;
+  } else if (originBrand) {
+    fundingTxt = `💰 via *${originBrand}*`;
+  } else if (profile.bridge_origin_wallet) {
+    const age = profile.funder_age_days;
+    const aged = age !== null ? ` · aged ${age}d ⚠️ established` : "";
+    fundingTxt = `💰 funder ${walletLink(profile.bridge_origin_wallet)}${aged}`;
+  } else if (profile.funding_source) {
+    fundingTxt = `💰 via *${brand(profile.funding_source)}*`;
+  }
+
   const text = [
     header,
     "",
@@ -179,7 +199,8 @@ async function fireAlert(
     "",
     `${walletLink(profile.wallet)} · score ${profile.score}/10`,
     ageTxt,
-  ].join("\n");
+    fundingTxt,
+  ].filter((x) => x).join("\n");
 
   await sendMessage({
     chatId: chat,

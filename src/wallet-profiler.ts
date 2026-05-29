@@ -47,6 +47,16 @@ export interface WalletProfile {
    *  two proxies sharing the same origin should NOT cluster — many real users
    *  withdraw from the same Binance hot wallet on Base. */
   bridge_origin_funding_source: FundingCategory;
+  /** Age (days) of bridge_origin_wallet itself, when it was an UNKNOWN funder
+   *  we inspected. null when not inspected. Drives the conduit-vs-established
+   *  distinction below. */
+  funder_age_days: number | null;
+  /** True when bridge_origin_wallet was a FRESH one-time conduit (young, low-
+   *  history) and we traced ONE more hop to the exchange that funded it —
+   *  bridge_origin_funding_source then holds that exchange. When false and
+   *  bridge_origin_funding_source is private, the funder is an ESTABLISHED
+   *  wallet whose own identity/age is the signal (do NOT collapse to a CEX). */
+  funder_is_conduit: boolean;
   last_refreshed_iso: string;
   last_refreshed_ts: number;
 }
@@ -142,6 +152,40 @@ async function fetchEarliestUsdcInflow(wallet: string): Promise<AssetTransfer | 
   return null;
 }
 
+/** A funder younger than this (days) is treated as a throwaway one-time
+ *  conduit → we trace ONE more hop to the exchange behind it. Older than
+ *  this, the funder is an established wallet whose own identity is signal
+ *  and must NOT be collapsed away. */
+const FRESH_FUNDER_DAYS = 14;
+
+/**
+ * Scan a funder wallet's USDC/pUSD inflows for the first transfer from a
+ * KNOWN exchange (cex/swap/fiat). Returns that classification or null.
+ * Used to resolve the exchange behind a fresh one-time conduit.
+ * NOTE: Alchemy pool is Polygon-only, so this catches Polygon-side CEX
+ * deposits (e.g. Coinbase-Polygon); Arbitrum/other-chain funding of the
+ * conduit is not visible here.
+ */
+async function fetchFirstExchangeSender(wallet: string): Promise<FundingCategory> {
+  const params = {
+    toAddress: wallet,
+    contractAddresses: USDC_CONTRACTS,
+    category: ["erc20"],
+    order: "asc",
+    maxCount: "0x32", // 50
+    withMetadata: false,
+    excludeZeroValue: true,
+  };
+  const result = await rpc<{ transfers: AssetTransfer[] }>("alchemy_getAssetTransfers", [params]);
+  for (const t of result.transfers || []) {
+    if (typeof t.value !== "number" || t.value < MEANINGFUL_USDC) continue;
+    const cat = classify((t.from || "").toLowerCase());
+    const bucket = categoryBucket(cat);
+    if (bucket === "cex" || bucket === "swap" || bucket === "fiat") return cat;
+  }
+  return null;
+}
+
 async function buildProfile(wallet: string): Promise<WalletProfile> {
   const lc = wallet.toLowerCase();
   try {
@@ -161,6 +205,8 @@ async function buildProfile(wallet: string): Promise<WalletProfile> {
     let bridge_origin_wallet: string | null = null;
     let bridge_origin_chain: number | null = null;
     let bridge_origin_funding_source: FundingCategory = null;
+    let funder_age_days: number | null = null;
+    let funder_is_conduit = false;
     const bucket = categoryBucket(funding);
     if (bucket === "bridge" || bucket === "private") {
       const bridgeName =
@@ -172,6 +218,35 @@ async function buildProfile(wallet: string): Promise<WalletProfile> {
         // Classify the origin too — Coinbase Base / Binance Solana would
         // otherwise spuriously link hundreds of users.
         bridge_origin_funding_source = classify(origin.user);
+
+        // Funder is an UNKNOWN wallet → decide conduit vs established.
+        // - FRESH funder (< FRESH_FUNDER_DAYS): a throwaway pass-through
+        //   between an exchange and Polymarket. Trace one more hop to the
+        //   exchange and show THAT ("via Coinbase"). The conduit itself
+        //   carries no identity signal.
+        // - OLD funder: a deposit landing on an established wallet that
+        //   then forwards. The aged wallet's identity IS the signal —
+        //   keep it, do NOT collapse to the exchange (we'd lose it).
+        if (categoryBucket(bridge_origin_funding_source) === "private") {
+          try {
+            const fb = await fetchEarliestUsdcInflow(bridge_origin_wallet);
+            const fts = fb?.metadata?.blockTimestamp
+              ? Date.parse(fb.metadata.blockTimestamp)
+              : null;
+            funder_age_days = fts
+              ? Math.floor((Date.now() - fts) / (24 * 60 * 60 * 1000))
+              : null;
+            if (funder_age_days !== null && funder_age_days < FRESH_FUNDER_DAYS) {
+              const ex = await fetchFirstExchangeSender(bridge_origin_wallet);
+              if (ex) {
+                bridge_origin_funding_source = ex; // collapse fresh conduit → exchange
+                funder_is_conduit = true;
+              }
+            }
+          } catch (e) {
+            err("wallet-profiler", `funder resolve failed for ${bridge_origin_wallet}`, (e as Error).message);
+          }
+        }
       }
     }
 
@@ -191,6 +266,8 @@ async function buildProfile(wallet: string): Promise<WalletProfile> {
       bridge_origin_wallet,
       bridge_origin_chain,
       bridge_origin_funding_source,
+      funder_age_days,
+      funder_is_conduit,
       last_refreshed_iso: new Date().toISOString(),
       last_refreshed_ts: Date.now(),
     };
