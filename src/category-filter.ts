@@ -201,6 +201,14 @@ const SKIP_TAG_SLUGS: Set<string> = new Set([
   // Trump/Warsh/Powell "what will X say/mention" categorical word-list
   // brackets. The tag marks Polymarket's word-mention factory shape.
   "mentions",
+  // Election-OUTCOME umbrella tags. `vote-share` and `global-elections`
+  // are outcome-only (vote shares, foreign-election winners/places) — no
+  // Polymarket-side insider edge, public polling/voting. NOT skipping the
+  // broader `elections` tag (it also sits on election-DATE / will-it-
+  // happen markets we keep); rule 59 slug-regexes catch outcome shapes
+  // with the necessary date-KEEP specificity.
+  "vote-share",
+  "global-elections",
 ]);
 
 /**
@@ -577,6 +585,51 @@ const SKIP_SLUG_RES: RegExp[] = [
   /-open-interest-(?:flipped|hit|reach|above|below)/i,
   /^will-[a-z-]*stables?-hit-\$?\d/i,
   /-end-the-year-above-\$?[\d.]+[kmb]?-fdv\b/i,
+  // === RULE 59: election-OUTCOME brackets ===
+  // The May-24 election cull (commit 8cc7cd5) was an archive-only one-shot
+  // trim — the logic was NEVER codified here, so new election markets flow
+  // straight through event-discovery → digest (e.g. Colombia 1st-round
+  // vote-share + most-votes-by-region markets that opened after the cull).
+  // Ported from that trim's regex set + new shapes (-vote-share-in-,
+  // -most-votes-from-). User framework: election OUTCOMES are public-
+  // polling/voting noise (no Polymarket-side insider edge). KEPT: election
+  // DATE predictions, court rulings, single-politician events, diplomatic
+  // meetings — see the negative lookaheads / shape specificity below.
+  /-primary-winners?(?:-|$)/i,
+  /-primary-runoff-(?:winner|margin)/i,
+  /^turnout-in-[a-z][a-z-]+-primary/i,
+  /^[a-z]{2}-\d{1,2}-(?:democratic|republican|gop|dem)?-?primary-winners?/i,
+  /^[a-z][a-z-]+-(?:senate|house|governor|gubernatorial|mayoral|attorney-general|presidential)-(?:democratic|republican|gop|dem)-primary/i,
+  /^[a-z][a-z-]+-(?:democratic|republican|gop|dem)-(?:senate|house|governor|gubernatorial|mayoral|attorney-general|presidential)-primary/i,
+  /^parties-advancing-from-/i,
+  /-(?:parliamentary|presidential|legislative|gubernatorial|congressional|mayoral|general|leadership|municipal|by|local|snap)-elections?(?:$|-)/i,
+  /^[a-z][a-z-]+-(?:presidential|gubernatorial|parliamentary)-election$/i,
+  /-election-(?:winner|margin-of-victory|turnout|first-place|second-place|third-place|1st-round|2nd-round|3rd-round|3rd-place|2nd-place|outright|advance|party-winner|of-seats|most-votes)/i,
+  /-elections?-party-winner/i,
+  /-by-elections?-(?:party-winner|seats?)/i,
+  /-most-votes-(?:from|in)-/i,            // "...1st-round-most-votes-from-antioquia"
+  /-vote-share-in-\d{4}/i,                // "ivn-cepeda-vote-share-in-2026-colombian-presidential-first-round"
+  /-vote-share(?:-|$)/i,                  // generic vote-share bracket
+  /^who-will-advance-from-the-/i,
+  /-outright-winner-in-the-/i,
+  /-(?:senate|house|gubernatorial)-(?:seats|races)-after-/i,
+  /-house-winner-\d{4}/i,
+  /-governor-winner-\d{4}/i,
+  /-after-the-\d{4}-midterm-elections/i,
+  /-most-seats-(?:won|held|after)/i,
+  /^of-seats-(?:won|held|gained)-by-/i,
+  /^[a-z][a-z-]+-of-seats(?:-|$)/i,
+  /-margin-of-victory(?:-|$)/i,
+  /-nominee-for-[a-z]+/i,
+  /^(?:democratic|republican|gop|dem)-(?:vp-|presidential-|gubernatorial-)?(?:nominee|presidential-nominee|vp-nominee)-\d{4}/i,
+  /^(?:democratic|republican|gop|dem)-nominee-for-/i,
+  /^who-will-be-the-(?:democratic|republican|gop|dem|next)-/i,
+  /^next-(?:prime-minister|president|chancellor|premier|secretary|mayor|governor|pm)-of-/i,
+  /^party-of-next-(?:prime-minister|president|chancellor|premier|mayor|governor|pm)-/i,
+  /^which-party-(?:wins|will-win|will-gain|gains?)-/i,
+  /^who-will-win-(?:the-)?(?:\d{4}-)?(?:democratic|republican|gop|dem|primary|general|election|senate|house|governor)/i,
+  /^who-will-place-first-/i,
+  /^will-(?:democrats|republicans|gop|dem|dnc|rnc|the-democrats|the-republicans)-(?:win|lose|gain|hold|sweep|keep|flip)-/i,
 ];
 
 export function isSkippedSlug(slug: string): boolean {
