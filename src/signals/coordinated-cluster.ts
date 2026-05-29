@@ -99,6 +99,15 @@ function within(a: number, b: number, tolerance: number): boolean {
 interface PairScore {
   score: number;
   factors: string[];
+  /** True only when the pair shares an IDENTITY link (same private funder
+   *  or same private bridge-origin). Time/size/burner correlation is NOT
+   *  identity — on a hot news market many independent wallets pile in
+   *  same-side at similar size within minutes. A cluster must be anchored
+   *  by at least one identity pair, else it's correlated-but-independent
+   *  noise. (User-accepted tradeoff: may miss a coordinator who funds each
+   *  burner via a distinct path, but kills the spam that made the signal
+   *  useless.) */
+  identity: boolean;
 }
 
 const CEX_SAME_TIGHT_MS = 7 * 24 * 60 * 60 * 1000;
@@ -120,8 +129,9 @@ function pairwiseScore(a: WalletAgg, b: WalletAgg): PairScore {
       ? b.net_outcome0_notional >= b.net_outcome1_notional ? 0 : 1
       : null;
   if (aSide === null || bSide === null || aSide !== bSide) {
-    return { score: 0, factors: [] };
+    return { score: 0, factors: [], identity: false };
   }
+  let identity = false;
 
   // Phase 6b: same true origin on source chain (after Relay tracing).
   // Critical: only fire if the origin itself is a private wallet, not a
@@ -139,6 +149,7 @@ function pairwiseScore(a: WalletAgg, b: WalletAgg): PairScore {
       factors.push(`shared-origin-skip:${a.bridge_origin_wallet.slice(0, 8)}…(fanout)`);
     } else if (originBucket === "private") {
       s += 0.8;
+      identity = true;
       factors.push(`same-bridge-origin:${a.bridge_origin_wallet.slice(0, 8)}…`);
     } else if (originBucket === "cex" || originBucket === "swap") {
       // Same exact CEX/swap hot wallet on source chain — weak but real;
@@ -166,6 +177,7 @@ function pairwiseScore(a: WalletAgg, b: WalletAgg): PairScore {
       factors.push(`shared-funder-skip:${a.first_inflow_from.slice(0, 8)}…(fanout)`);
     } else if (bucket === "private") {
       s += 0.8;
+      identity = true;
       factors.push(`same-funder:${a.first_inflow_from.slice(0, 8)}…`);
     } else if (bucket === "cex" || bucket === "swap") {
       // Same exact CEX/swap hot wallet — one withdrawal funded both proxies.
@@ -229,7 +241,7 @@ function pairwiseScore(a: WalletAgg, b: WalletAgg): PairScore {
     factors.push("burner-pair");
   }
 
-  return { score: s, factors };
+  return { score: s, factors, identity };
 }
 
 function findClusters(adj: Map<string, Set<string>>): string[][] {
@@ -411,7 +423,14 @@ async function detectClusters(eventSlug: string): Promise<DetectResult | null> {
       const a = arr[i];
       const b = arr[j];
       const ps = pairwiseScore(a, b);
-      if (ps.score < SCORE_PAIR_LINK) continue;
+      // EDGE requires an IDENTITY link (shared private funder/origin), not
+      // just a ≥0.6 score. Otherwise time+size+same-side correlation (0.7+)
+      // would connect every wallet that piled into a hot market within an
+      // hour → a bloated component that one stray identity pair then
+      // qualifies. Identity-only edges ⇒ a cluster IS a shared-funding
+      // cohort. (burner/time/size remain score corroborators, shown in
+      // factors, but never create an edge on their own.)
+      if (ps.score < SCORE_PAIR_LINK || !ps.identity) continue;
       const key = a.wallet < b.wallet ? `${a.wallet}|${b.wallet}` : `${b.wallet}|${a.wallet}`;
       pairScoreMap.set(key, ps);
       if (!adj.has(a.wallet)) adj.set(a.wallet, new Set());
@@ -490,7 +509,11 @@ export async function clusterReport(eventSlug: string): Promise<string> {
       for (let j = i + 1; j < cluster.length; j++) {
         const k = cluster[i] < cluster[j] ? `${cluster[i]}|${cluster[j]}` : `${cluster[j]}|${cluster[i]}`;
         const ps = res.pairScoreMap.get(k);
-        if (ps && ps.score > maxScore) { maxScore = ps.score; maxFactors = ps.factors; }
+        // Anchor requires a strong IDENTITY pair (shared private funder/
+        // origin), not mere time+size correlation.
+        if (ps && ps.score >= SCORE_PAIR_STRONG && ps.identity && ps.score > maxScore) {
+          maxScore = ps.score; maxFactors = ps.factors;
+        }
       }
     }
     if (maxScore < SCORE_PAIR_STRONG) continue;
@@ -546,7 +569,9 @@ export async function checkMarket(eventSlug: string, meta: MarketMeta): Promise<
   const { clusters, wallets, pairScoreMap } = res;
 
   for (const cluster of clusters) {
-    // Require at least one strong pair (≥0.8) within the cluster.
+    // Require at least one strong IDENTITY pair (≥0.8 AND a shared private
+    // funder/origin). Time+size+same-side correlation alone does NOT anchor
+    // a cluster — that's just a hot market.
     let maxPair = { a: "", b: "", score: 0, factors: [] as string[] };
     for (let i = 0; i < cluster.length; i++) {
       for (let j = i + 1; j < cluster.length; j++) {
@@ -555,7 +580,7 @@ export async function checkMarket(eventSlug: string, meta: MarketMeta): Promise<
         const key = a < b ? `${a}|${b}` : `${b}|${a}`;
         const ps = pairScoreMap.get(key);
         if (!ps) continue;
-        if (ps.score > maxPair.score) {
+        if (ps.score >= SCORE_PAIR_STRONG && ps.identity && ps.score > maxPair.score) {
           maxPair = { a, b, score: ps.score, factors: ps.factors };
         }
       }
