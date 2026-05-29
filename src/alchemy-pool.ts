@@ -1,8 +1,31 @@
 import { request } from "undici";
 import { log, err } from "./log.js";
 
-const POLYGON_BASE = "https://polygon-mainnet.g.alchemy.com/v2/";
 const EXHAUSTED_RETRY_MS = 5 * 60 * 1000;
+
+/**
+ * Alchemy network subdomain per logical chain. One key works across all
+ * networks enabled on the Alchemy app. `rpc()` defaults to polygon for
+ * backward-compat; pass a chain to hit another network. Add subdomains
+ * here as needed (Alchemy now covers non-EVM too, e.g. solana-mainnet).
+ */
+const NETWORK_SUBDOMAIN: Record<string, string> = {
+  polygon: "polygon-mainnet",
+  arbitrum: "arb-mainnet",
+  base: "base-mainnet",
+  optimism: "opt-mainnet",
+  ethereum: "eth-mainnet",
+  bnb: "bnb-mainnet",
+  avalanche: "avax-mainnet",
+  solana: "solana-mainnet",
+};
+
+export type AlchemyChain = keyof typeof NETWORK_SUBDOMAIN | string;
+
+function baseUrlFor(chain: AlchemyChain): string {
+  const sub = NETWORK_SUBDOMAIN[chain] || NETWORK_SUBDOMAIN.polygon;
+  return `https://${sub}.g.alchemy.com/v2/`;
+}
 
 interface KeyState {
   key: string;
@@ -46,14 +69,22 @@ function looksExhausted(status: number, text: string): boolean {
   return /credit|quota|exceeded|insufficient|depleted|limit/i.test(text);
 }
 
-/** Call a Polygon JSON-RPC method via the next non-exhausted Alchemy key. */
-export async function rpc<T = unknown>(method: string, params: unknown[]): Promise<T> {
+/**
+ * Call a JSON-RPC method via the next non-exhausted Alchemy key.
+ * `chain` selects the Alchemy network (default "polygon" for back-compat).
+ */
+export async function rpc<T = unknown>(
+  method: string,
+  params: unknown[],
+  chain: AlchemyChain = "polygon",
+): Promise<T> {
   const p = getPool();
   let lastErr: unknown = null;
+  const base = baseUrlFor(chain);
 
   for (let attempt = 0; attempt < p.length; attempt++) {
     const k = pickKey();
-    const url = POLYGON_BASE + k.key;
+    const url = base + k.key;
     try {
       const res = await request(url, {
         method: "POST",
