@@ -21,7 +21,42 @@ const USDC_NATIVE = "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359"; // native USDC
 // 2026-05-29: 0x0f02… (real $2.3M actor) received 8 pUSD inflows and zero
 // USDC.e, so the profiler saw inflow_count=0 and mis-flagged it.
 const PUSD = "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb";
+// Polygon stable-token set (the proxy itself lives on Polygon → its own
+// inflow/age scan uses this).
 const USDC_CONTRACTS = [USDC_E, USDC_NATIVE, PUSD];
+
+/**
+ * Per-chain USD-stable contract sets for the funder-resolve scan. A conduit
+ * can be fed on any chain (e.g. via Hyperliquid on Arbitrum), so resolving
+ * the exchange behind it requires scanning the right chain's USDC variants.
+ * Alchemy pool is now multichain (rpc(..., chain)).
+ */
+const STABLES_BY_CHAIN: Record<string, string[]> = {
+  polygon: [USDC_E, USDC_NATIVE, PUSD],
+  arbitrum: [
+    "0xaf88d065e77c8cc2239327c5edb3a432268e5831", // native USDC
+    "0xff970a61a04b1ca14834a43f5de4533ebddb5cc8", // USDC.e (bridged)
+    "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9", // USDT
+  ],
+  base: [
+    "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", // native USDC
+    "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca", // USDbC (bridged)
+  ],
+  ethereum: [
+    "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", // USDC
+    "0xdac17f958d2ee523a2206206994597c13d831ec7", // USDT
+  ],
+  optimism: [
+    "0x0b2c639c533813f4aa9d7837caf62653d097ff85", // native USDC
+    "0x7f5c764cbc14f9669b88837ca1490cca17c31607", // USDC.e (bridged)
+  ],
+};
+/** Numeric chain id → Alchemy chain key, for prioritizing the deposit-leg chain. */
+const CHAINID_TO_ALCHEMY: Record<number, string> = {
+  1: "ethereum", 10: "optimism", 137: "polygon", 8453: "base", 42161: "arbitrum",
+};
+/** Order we scan when resolving the exchange behind a conduit. */
+const FUNDER_SCAN_CHAINS = ["polygon", "arbitrum", "base", "ethereum", "optimism"];
 
 export interface WalletProfile {
   wallet: string;
@@ -165,29 +200,44 @@ async function fetchEarliestUsdcInflow(wallet: string): Promise<AssetTransfer | 
 export const FRESH_FUNDER_DAYS = 14;
 
 /**
- * Scan a funder wallet's USDC/pUSD inflows for the first transfer from a
- * KNOWN exchange (cex/swap/fiat). Returns that classification or null.
- * Used to resolve the exchange behind a fresh one-time conduit.
- * NOTE: Alchemy pool is Polygon-only, so this catches Polygon-side CEX
- * deposits (e.g. Coinbase-Polygon); Arbitrum/other-chain funding of the
- * conduit is not visible here.
+ * Scan a funder wallet's stable inflows ACROSS MAIN EVM CHAINS for the first
+ * transfer from a KNOWN exchange (cex/swap/fiat). Returns that classification
+ * or null. Used to resolve the exchange behind a fresh one-time conduit.
+ * `priorityChain` (the chain the deposit leg came from) is scanned first.
  */
-async function fetchFirstExchangeSender(wallet: string): Promise<FundingCategory> {
-  const params = {
-    toAddress: wallet,
-    contractAddresses: USDC_CONTRACTS,
-    category: ["erc20"],
-    order: "asc",
-    maxCount: "0x32", // 50
-    withMetadata: false,
-    excludeZeroValue: true,
-  };
-  const result = await rpc<{ transfers: AssetTransfer[] }>("alchemy_getAssetTransfers", [params]);
-  for (const t of result.transfers || []) {
-    if (typeof t.value !== "number" || t.value < MEANINGFUL_USDC) continue;
-    const cat = classify((t.from || "").toLowerCase());
-    const bucket = categoryBucket(cat);
-    if (bucket === "cex" || bucket === "swap" || bucket === "fiat") return cat;
+async function fetchFirstExchangeSender(
+  wallet: string,
+  priorityChain?: string,
+): Promise<FundingCategory> {
+  const chains = [priorityChain, ...FUNDER_SCAN_CHAINS].filter(
+    (c, i, a): c is string => !!c && a.indexOf(c) === i,
+  );
+  for (const chain of chains) {
+    const tokens = STABLES_BY_CHAIN[chain];
+    if (!tokens) continue;
+    try {
+      const result = await rpc<{ transfers: AssetTransfer[] }>(
+        "alchemy_getAssetTransfers",
+        [{
+          toAddress: wallet,
+          contractAddresses: tokens,
+          category: ["erc20"],
+          order: "asc",
+          maxCount: "0x32",
+          withMetadata: false,
+          excludeZeroValue: true,
+        }],
+        chain,
+      );
+      for (const t of result.transfers || []) {
+        if (typeof t.value !== "number" || t.value < MEANINGFUL_USDC) continue;
+        const cat = classify((t.from || "").toLowerCase());
+        const bucket = categoryBucket(cat);
+        if (bucket === "cex" || bucket === "swap" || bucket === "fiat") return cat;
+      }
+    } catch {
+      // chain may not be enabled on the key, or transient — try next chain.
+    }
   }
   return null;
 }
@@ -244,7 +294,10 @@ async function buildProfile(wallet: string): Promise<WalletProfile> {
               ? Math.floor((Date.now() - fts) / (24 * 60 * 60 * 1000))
               : null;
             if (funder_age_days !== null && funder_age_days < FRESH_FUNDER_DAYS) {
-              const ex = await fetchFirstExchangeSender(bridge_origin_wallet);
+              const priorityChain = bridge_origin_chain
+                ? CHAINID_TO_ALCHEMY[bridge_origin_chain]
+                : undefined;
+              const ex = await fetchFirstExchangeSender(bridge_origin_wallet, priorityChain);
               if (ex) {
                 // DISPLAY only — record the exchange behind the fresh conduit
                 // for the alert ("via Coinbase"). Do NOT overwrite
