@@ -31,6 +31,24 @@ Per signal-type, extract from log line:
                  (path A = score-based, B = hidden-funding)
 - volume-spike:  `alert: <slug> <multiplier>x baseline`
 
+CLUSTER RE-REVIEW (mandatory — the `cluster=N` count in the log is the
+detection-time count and is STALE by morning). For each UNIQUE cluster
+event_slug, re-run the reviewer, which re-applies the same-side gate +
+funder-fanout neutralization + end-of-day position prune (drops members
+who sold out / now hold < $100):
+```
+cd /root/polymarket-watch && npx tsx src/cluster-cli.ts <event_slug>
+```
+- If the output contains "no qualifying" or "none survive" → the cluster
+  has DECAYED (over-linked or everyone exited) → DROP it from the digest
+  entirely. Do not list it.
+- Otherwise parse the header line(s) `*Cluster k* — M wallets · *SIDE* ·
+  $X held · pair P (...)` for the CURRENT member count / side / $ held —
+  use THOSE numbers in the digest, not the stale log count. A slug may
+  yield multiple sub-clusters; take the largest.
+This is throttled (it queries positions per member); expect a few seconds
+per cluster event. Only re-review cluster events, not every alert.
+
 Resolve event_slug → human title via Gamma (cache per unique slug, 200ms
 throttle):
 ```
@@ -173,7 +191,7 @@ titles. Template:
 _<YYYY-MM-DD> 09:00 Europe/Berlin_
 
 *🇮🇷 Iran / Middle East* (12)
-• 🔥 [Iran ceasefire continues through](https://polymarket.com/event/iran-...) — coord-cluster 37 wallets · *NO* $124k
+• 🔥 [Iran ceasefire continues through](https://polymarket.com/event/iran-...) — coord-cluster *8 wallets* · *NO* $124k held   ← post-review count/held from cluster-cli, NOT the stale log "cluster=37"
 • 🚨 [Israel-Iran peace deal by](https://polymarket.com/event/israel-...) — fresh-wallet [0xab12…cd34](https://polygonscan.com/address/0xfull) *NO* $16k (hidden funding, score 1)
 • 🚨 📈 scaled in [US x Iran peace deal](https://polymarket.com/event/us-x-iran-...) — fresh-wallet [0x0f02…5bfb](https://polygonscan.com/address/0xfull) *NO* $2.3M (hidden funding, score 1)   ← end-of-day cost basis, not the $97.6k alert snapshot
 • 🚨 🔁 добирает 3д [Iran regime falls](https://polymarket.com/event/iran-...) — fresh-wallet [0x9a01…77bc](https://polygonscan.com/address/0xfull) *YES* $840k ($120k→$410k→$840k) · via coinbase   ← same wallet+side hit 3 days running this week
@@ -191,15 +209,19 @@ _<YYYY-MM-DD> 09:00 Europe/Berlin_
 • ...
 
 *Всего:* freshwallet=N · cluster=M · xmarket=K · volspike=L
-_отсеяно: exited N · extreme-price N · est-wallet N_
+_отсеяно: exited N · extreme-price N · est-wallet N · decayed-clusters N_
 _суммы fresh-wallet = позиция на конец дня (cost basis), не снапшот алерта_
 ```
 
+`cluster=M` in the total is the count of clusters that SURVIVED re-review
+(not the raw alert count); note dropped ones as `decayed-clusters N`.
+
 For cluster (🔥) lines: do NOT put a `/cluster` text command. Instead,
-collect every cluster event_slug you list and attach an INLINE KEYBOARD
-to the message (STEP 6) — one tappable button per cluster that fires the
-report. The message body just shows the cluster line; the button below
-does the drill-in.
+collect every SURVIVING cluster event_slug you list and attach an INLINE
+KEYBOARD to the message (STEP 6) — one tappable button per cluster that
+fires the report. Decayed/dropped clusters get neither a line nor a
+button. The message body shows the post-review cluster line; the button
+does the live drill-in.
 
 Constraints:
 - Wallets ALWAYS as `[0xab12…cd34](polygonscan-url)` short clickable form
