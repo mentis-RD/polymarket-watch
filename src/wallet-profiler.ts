@@ -52,11 +52,17 @@ export interface WalletProfile {
    *  distinction below. */
   funder_age_days: number | null;
   /** True when bridge_origin_wallet was a FRESH one-time conduit (young, low-
-   *  history) and we traced ONE more hop to the exchange that funded it —
-   *  bridge_origin_funding_source then holds that exchange. When false and
-   *  bridge_origin_funding_source is private, the funder is an ESTABLISHED
-   *  wallet whose own identity/age is the signal (do NOT collapse to a CEX). */
+   *  history) and we traced ONE more hop to find the exchange behind it.
+   *  When false and bridge_origin_funding_source is private, the funder is an
+   *  ESTABLISHED wallet whose own identity/age is the signal. */
   funder_is_conduit: boolean;
+  /** DISPLAY-ONLY: exchange resolved one hop behind a FRESH conduit
+   *  ("via Coinbase"). Intentionally SEPARATE from bridge_origin_funding_source
+   *  — clustering must key on the funder/conduit ADDRESS (kept as the funder's
+   *  own classification, usually `private` → strong same-actor signal), NOT on
+   *  the upstream exchange (which would weaken it to a CEX-bucket score). Null
+   *  unless we resolved an exchange behind a fresh conduit. */
+  funder_exchange: FundingCategory;
   last_refreshed_iso: string;
   last_refreshed_ts: number;
 }
@@ -207,6 +213,7 @@ async function buildProfile(wallet: string): Promise<WalletProfile> {
     let bridge_origin_funding_source: FundingCategory = null;
     let funder_age_days: number | null = null;
     let funder_is_conduit = false;
+    let funder_exchange: FundingCategory = null;
     const bucket = categoryBucket(funding);
     if (bucket === "bridge" || bucket === "private") {
       const bridgeName =
@@ -239,7 +246,12 @@ async function buildProfile(wallet: string): Promise<WalletProfile> {
             if (funder_age_days !== null && funder_age_days < FRESH_FUNDER_DAYS) {
               const ex = await fetchFirstExchangeSender(bridge_origin_wallet);
               if (ex) {
-                bridge_origin_funding_source = ex; // collapse fresh conduit → exchange
+                // DISPLAY only — record the exchange behind the fresh conduit
+                // for the alert ("via Coinbase"). Do NOT overwrite
+                // bridge_origin_funding_source: clustering keys on the conduit
+                // ADDRESS (still `private` → 0.8 same-actor), and collapsing to
+                // a CEX bucket here would weaken that to 0.2.
+                funder_exchange = ex;
                 funder_is_conduit = true;
               }
             }
@@ -268,6 +280,7 @@ async function buildProfile(wallet: string): Promise<WalletProfile> {
       bridge_origin_funding_source,
       funder_age_days,
       funder_is_conduit,
+      funder_exchange,
       last_refreshed_iso: new Date().toISOString(),
       last_refreshed_ts: Date.now(),
     };

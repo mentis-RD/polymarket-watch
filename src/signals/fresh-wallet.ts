@@ -179,12 +179,13 @@ async function fireAlert(
   // than hiding it behind a CEX label.
   const brand = (c: string | null) => (c ? escapeMd(c.split(":")[1] || c) : null);
   let fundingTxt: string | null = null;
-  const originBrand = brand(profile.bridge_origin_funding_source);
   const fAge = profile.funder_age_days;
-  if (originBrand && profile.funder_is_conduit) {
-    fundingTxt = `💰 via *${originBrand}* (one-time conduit)`;
-  } else if (originBrand) {
-    fundingTxt = `💰 via *${originBrand}*`;
+  if (profile.funder_is_conduit && profile.funder_exchange) {
+    // Fresh one-time conduit resolved one hop back to its exchange.
+    fundingTxt = `💰 via *${brand(profile.funder_exchange)}* (one-time conduit)`;
+  } else if (brand(profile.bridge_origin_funding_source)) {
+    // Funder address is itself a known exchange/service.
+    fundingTxt = `💰 via *${brand(profile.bridge_origin_funding_source)}*`;
   } else if (profile.bridge_origin_wallet) {
     // Unknown funder. Only call it "established" when it is genuinely aged;
     // a young-but-unresolved funder is a conduit whose exchange we couldn't
