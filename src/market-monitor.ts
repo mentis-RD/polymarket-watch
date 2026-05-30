@@ -33,6 +33,11 @@ const detector = new VolumeSpikeDetector();
 
 // asset_id (token_id) -> slug
 const assetToSlug = new Map<string, string>();
+// asset_id (token_id) -> outcomeIndex. Polymarket convention: clob_token_ids[0]
+// is the YES token, [1] is NO (verified: outcomes ["Yes","No"] map 1:1 to
+// clobTokenIds order). Lets the volume-spike detector classify a WS trade's
+// direction (the WS TradeEvent carries only asset_id, no outcomeIndex).
+const assetToOutcome = new Map<string, 0 | 1>();
 
 function appendTrade(t: StoredTrade): void {
   mkdirSync(STATE_DIR, { recursive: true });
@@ -70,7 +75,7 @@ function replayTrades(maxAgeMs: number): number {
         price: t.price,
         size: t.size,
         ts: t.ts,
-      });
+      }, assetToOutcome.get(t.asset_id) ?? 0);
       count++;
     } catch {
       /* skip malformed */
@@ -82,6 +87,7 @@ function replayTrades(maxAgeMs: number): number {
 function reloadWatchlist(): void {
   const wl = watchlist.load();
   const newAssetToEvent = new Map<string, string>(); // tokenId → event_slug
+  const newAssetToOutcome = new Map<string, 0 | 1>(); // tokenId → 0=YES, 1=NO
   const knownEvents = new Set<string>();
 
   for (const [eventSlug, entry] of Object.entries(wl)) {
@@ -94,8 +100,13 @@ function reloadWatchlist(): void {
       risk_tag: entry.risk_tag,
     });
     for (const sm of entry.sub_markets) {
-      for (const tokenId of sm.clob_token_ids || []) {
-        if (tokenId) newAssetToEvent.set(tokenId, eventSlug);
+      const ids = sm.clob_token_ids || [];
+      for (let i = 0; i < ids.length; i++) {
+        const tokenId = ids[i];
+        if (!tokenId) continue;
+        newAssetToEvent.set(tokenId, eventSlug);
+        // i===0 → YES, i===1 → NO (per the verified Gamma ordering).
+        if (i <= 1) newAssetToOutcome.set(tokenId, i as 0 | 1);
       }
     }
   }
@@ -106,6 +117,8 @@ function reloadWatchlist(): void {
 
   assetToSlug.clear();
   for (const [k, v] of newAssetToEvent) assetToSlug.set(k, v);
+  assetToOutcome.clear();
+  for (const [k, v] of newAssetToOutcome) assetToOutcome.set(k, v);
 
   ws.setAssetIds([...assetToSlug.keys()]);
   log(
@@ -133,17 +146,19 @@ function onTrade(t: TradeEvent): void {
   } catch (e) {
     err("market-monitor", "appendTrade failed", e);
   }
-  detector.ingest(eventSlug, t);
+  detector.ingest(eventSlug, t, assetToOutcome.get(t.asset_id) ?? 0);
 }
 
 async function main(): Promise<void> {
   mkdirSync(STATE_DIR, { recursive: true });
 
+  // Build the watchlist maps (incl. assetToOutcome) BEFORE replay, so replayed
+  // trades are classified YES/NO correctly rather than falling back to YES.
+  reloadWatchlist();
+
   log("market-monitor", "replaying recent trades into in-memory buckets");
   const replayed = replayTrades(TRADES_ROTATE_DAYS * 24 * 60 * 60 * 1000);
   log("market-monitor", `replayed ${replayed} trades`);
-
-  reloadWatchlist();
   ws.on("trade", onTrade);
   ws.on("open", () => log("market-monitor", "ws connected"));
   ws.on("close", () => log("market-monitor", "ws closed"));

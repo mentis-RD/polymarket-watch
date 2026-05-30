@@ -28,16 +28,34 @@ const ONE_SIDED_PCT = 0.7;
  * floor: the current hour must move at least this many dollars to even
  * be considered for a spike — kills micro-spikes on thin/dead markets
  * (e.g. a $1k trade on a market whose baseline is $10/hr = "100×" but
- * is absolute pocket change). Set to $500 for the test pass.
+ * is absolute pocket change).
  */
-const MIN_CUR_VOL_USD = 500;
-/** Baseline floor (USD/hr) — prevents divide-by-near-zero multiples. */
-const MIN_BASELINE_USD = 10;
+const MIN_CUR_VOL_USD = 1500;
+/**
+ * Baseline floor (USD/hr) — the market's NORMAL hourly volume must clear this
+ * to be tracked at all. At the old $10/hr (~$240/day of total volume) genuinely
+ * thin markets surfaced; raised to $50/hr (~$1.2k/day) so a spike means real
+ * money on an already-liquid market, not noise on a dead one.
+ */
+const MIN_BASELINE_USD = 50;
 
-/** Per-side hourly volume bucket — USD notional summed, by BUY/SELL. */
+/**
+ * Per-hour volume bucket — USD notional split by (outcome × taker side), so
+ * the digest can show OUTCOME direction (YES/NO), not just taker aggression.
+ * For a binary market, buying YES and selling NO both push toward YES, and
+ * buying NO / selling YES push toward NO. So:
+ *   yesPressure = buyYes + sellNo,  noPressure = buyNo + sellYes
+ *   (yesPressure + noPressure === total gross volume)
+ */
 interface Bucket {
-  buy: number;
-  sell: number;
+  buyYes: number;
+  sellYes: number;
+  buyNo: number;
+  sellNo: number;
+}
+
+function bucketVol(b: Bucket): number {
+  return b.buyYes + b.sellYes + b.buyNo + b.sellNo;
 }
 
 function hourKey(ts: number): number {
@@ -68,8 +86,9 @@ export class VolumeSpikeDetector {
     this.meta.delete(slug);
   }
 
-  /** Ingest a trade. Mutates the per-market bucket map. */
-  ingest(slug: string, t: TradeEvent): void {
+  /** Ingest a trade. Mutates the per-market bucket map. `outcomeIndex` is the
+   *  token's outcome (0=YES, 1=NO) resolved by the caller from clob_token_ids. */
+  ingest(slug: string, t: TradeEvent, outcomeIndex: 0 | 1): void {
     // Skip near-certain trades (>=95c) — volume churn on an already-decided
     // market isn't an informative spike. Trades while the market is still
     // contested (<95c) still accumulate, so a news-driven move INTO 95c
@@ -83,13 +102,18 @@ export class VolumeSpikeDetector {
     const hk = hourKey(t.ts);
     let b = perSlug.get(hk);
     if (!b) {
-      b = { buy: 0, sell: 0 };
+      b = { buyYes: 0, sellYes: 0, buyNo: 0, sellNo: 0 };
       perSlug.set(hk, b);
     }
-    // USD notional, not share count.
+    // USD notional, not share count. Split by outcome × side.
     const usd = t.size * t.price;
-    if (t.side === "BUY") b.buy += usd;
-    else b.sell += usd;
+    if (outcomeIndex === 0) {
+      if (t.side === "BUY") b.buyYes += usd;
+      else b.sellYes += usd;
+    } else {
+      if (t.side === "BUY") b.buyNo += usd;
+      else b.sellNo += usd;
+    }
 
     // Trim old buckets.
     const cutoff = hk - BASELINE_HOURS;
@@ -108,7 +132,7 @@ export class VolumeSpikeDetector {
     for (const [slug, perSlug] of this.buckets) {
       const cur = perSlug.get(curH);
       if (!cur) continue;
-      const curVol = cur.buy + cur.sell; // USD notional this hour
+      const curVol = bucketVol(cur); // gross USD notional this hour
       if (curVol < MIN_CUR_VOL_USD) continue; // absolute $ floor — kills micro-spikes
 
       // Baseline: mean hourly USD volume across previous hours, excluding current.
@@ -116,7 +140,7 @@ export class VolumeSpikeDetector {
       let count = 0;
       for (const [k, b] of perSlug) {
         if (k === curH) continue;
-        total += b.buy + b.sell;
+        total += bucketVol(b);
         count++;
       }
       if (count < 6) continue; // need at least 6 hours of history
@@ -126,9 +150,13 @@ export class VolumeSpikeDetector {
       const multiple = curVol / baseline;
       if (multiple < SPIKE_MULTIPLE) continue;
 
-      const sideRatio = Math.max(cur.buy, cur.sell) / curVol;
+      // OUTCOME direction (not taker aggression): buying YES and selling NO
+      // both push toward YES; buying NO / selling YES push toward NO.
+      const yesPressure = cur.buyYes + cur.sellNo;
+      const noPressure = cur.buyNo + cur.sellYes;
+      const sideRatio = Math.max(yesPressure, noPressure) / curVol;
       const oneSided = sideRatio >= ONE_SIDED_PCT;
-      const dominantSide = cur.buy >= cur.sell ? "BUY" : "SELL";
+      const dominantSide = yesPressure >= noPressure ? "YES" : "NO";
 
       const key = `volspike:${slug}:${curH}`;
       if (!canAlert(key, COOLDOWN_MS)) continue;
