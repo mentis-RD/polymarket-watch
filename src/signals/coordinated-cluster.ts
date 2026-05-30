@@ -1,5 +1,6 @@
 import { request } from "undici";
 import { getProfile, getFunderFanout, type WalletProfile } from "../wallet-profiler.js";
+import { rpc } from "../alchemy-pool.js";
 import { canAlert, markAlerted } from "../alert-cooldown.js";
 import { sendMessage } from "../telegram.js";
 import { escapeMd } from "../markdown.js";
@@ -29,6 +30,48 @@ const FRESH_AGE_DAYS = 21;
  * exceeds this many distinct signal-firing recipients.
  */
 const FUNDER_FANOUT_LIMIT = 20;
+
+/**
+ * A shared funder / bridge-origin that is a CONTRACT is infrastructure — a
+ * bridge, router, disperser, or proxy — NOT a human coordinator's wallet.
+ * A real coordinator funds burners from an EOA; a contract origin is used by
+ * many unrelated wallets and carries no individual-identity signal. This is
+ * the precise complement to FUNDER_FANOUT_LIMIT: the fanout cap counts only
+ * PROFILED recipients, so a hub whose profiled-fanout happens to sit just
+ * under 20 slips through (root-caused 2026-05-30: contract 0xaea4d1…, 28
+ * on-chain recipients but only 19 profiled, glued 15 wallets into a bogus
+ * cluster on us-military-draft-authorized-in-2026). Checking code-ness kills
+ * that whole class regardless of how many recipients we happen to have seen.
+ *
+ * Memoized for the process — contract-ness never changes. eth_getCode error →
+ * left absent (treated as non-contract, edge kept) so an RPC hiccup never
+ * suppresses a real signal; it self-heals on the next scan.
+ */
+const codeIsContract = new Map<string, boolean>();
+
+async function markContractAddrs(addrs: string[]): Promise<Set<string>> {
+  const contracts = new Set<string>();
+  const toCheck: string[] = [];
+  for (const a of addrs) {
+    if (!a) continue;
+    const cached = codeIsContract.get(a);
+    if (cached === undefined) toCheck.push(a);
+    else if (cached) contracts.add(a);
+  }
+  await Promise.all(
+    [...new Set(toCheck)].map(async (a) => {
+      try {
+        const code = await rpc<string>("eth_getCode", [a, "latest"], "polygon");
+        const isC = !!code && code !== "0x";
+        codeIsContract.set(a, isC);
+        if (isC) contracts.add(a);
+      } catch {
+        /* leave uncached → treated as non-contract this scan, retried next */
+      }
+    }),
+  );
+  return contracts;
+}
 
 import type { EnrichedTrade } from "../enriched-store.js";
 
@@ -112,7 +155,7 @@ interface PairScore {
 
 const CEX_SAME_TIGHT_MS = 7 * 24 * 60 * 60 * 1000;
 
-function pairwiseScore(a: WalletAgg, b: WalletAgg): PairScore {
+function pairwiseScore(a: WalletAgg, b: WalletAgg, contracts: Set<string>): PairScore {
   const factors: string[] = [];
   let s = 0;
 
@@ -148,7 +191,11 @@ function pairwiseScore(a: WalletAgg, b: WalletAgg): PairScore {
     a.bridge_origin_wallet !== ZERO
   ) {
     const originBucket = categoryBucket(a.bridge_origin_funding_source);
-    if (originBucket === "private" && getFunderFanout(a.bridge_origin_wallet) > FUNDER_FANOUT_LIMIT) {
+    if (originBucket === "private" && contracts.has(a.bridge_origin_wallet)) {
+      // Origin is a CONTRACT (bridge/router/disperser/proxy) = infrastructure,
+      // not a coordinator's wallet. No identity signal.
+      factors.push(`shared-origin-skip:${a.bridge_origin_wallet.slice(0, 8)}…(contract)`);
+    } else if (originBucket === "private" && getFunderFanout(a.bridge_origin_wallet) > FUNDER_FANOUT_LIMIT) {
       // High-fanout "private" origin = shared conduit/service, not a
       // coordinator. No signal.
       factors.push(`shared-origin-skip:${a.bridge_origin_wallet.slice(0, 8)}…(fanout)`);
@@ -177,7 +224,11 @@ function pairwiseScore(a: WalletAgg, b: WalletAgg): PairScore {
     a.first_inflow_from !== ZERO
   ) {
     const bucket = categoryBucket(a.funding_source);
-    if (bucket === "private" && getFunderFanout(a.first_inflow_from) > FUNDER_FANOUT_LIMIT) {
+    if (bucket === "private" && contracts.has(a.first_inflow_from)) {
+      // Funder is a CONTRACT (disperser/router/proxy) = infrastructure, not a
+      // coordinator's wallet. No identity signal.
+      factors.push(`shared-funder-skip:${a.first_inflow_from.slice(0, 8)}…(contract)`);
+    } else if (bucket === "private" && getFunderFanout(a.first_inflow_from) > FUNDER_FANOUT_LIMIT) {
       // High-fanout "private" funder = shared on-ramp/conduit, not a
       // coordinator (it funds many unrelated proxies). No signal.
       factors.push(`shared-funder-skip:${a.first_inflow_from.slice(0, 8)}…(fanout)`);
@@ -421,6 +472,17 @@ async function detectClusters(eventSlug: string): Promise<DetectResult | null> {
     }
   }
 
+  // Contract pre-pass: any shared funder / bridge-origin that is a contract is
+  // infrastructure, not a coordinator — collect them once so pairwiseScore can
+  // neutralize those edges (kills shared-disperser/bridge false clusters that
+  // slip the profiled-only fanout cap).
+  const originAddrs = new Set<string>();
+  for (const a of wallets.values()) {
+    if (a.bridge_origin_wallet) originAddrs.add(a.bridge_origin_wallet);
+    if (a.first_inflow_from) originAddrs.add(a.first_inflow_from);
+  }
+  const contracts = await markContractAddrs([...originAddrs]);
+
   const adj = new Map<string, Set<string>>();
   const pairScoreMap = new Map<string, PairScore>();
   const arr = [...wallets.values()];
@@ -428,7 +490,7 @@ async function detectClusters(eventSlug: string): Promise<DetectResult | null> {
     for (let j = i + 1; j < arr.length; j++) {
       const a = arr[i];
       const b = arr[j];
-      const ps = pairwiseScore(a, b);
+      const ps = pairwiseScore(a, b, contracts);
       // EDGE requires an IDENTITY link (shared private funder/origin), not
       // just a ≥0.6 score. Otherwise time+size+same-side correlation (0.7+)
       // would connect every wallet that piled into a hot market within an
