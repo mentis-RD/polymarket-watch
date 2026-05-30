@@ -109,16 +109,22 @@ list is mostly noise without them.
 
 (c) NON-FRESH — the "hidden funding" path fires on wallets with no $1k+
     USDC inflow on record, but many are seasoned traders funded another
-    way. Verify freshness by trade history:
+    way (CEX / pUSD / other rail). The live signal now pre-filters these
+    (established guard shipped 2026-05-30: ≥1000 lifetime trades OR first
+    trade >90d → skip), so few should reach here — but log lines fired
+    before that still surface for 24h, so enforce it. Verify by trade
+    history:
     ```
-    curl -s "https://data-api.polymarket.com/trades?user=<wallet>&limit=1&offset=1000" | jq 'length'
+    curl -s "https://data-api.polymarket.com/trades?user=<wallet>&limit=1000" \
+      | jq 'if type=="array" then {n:length, oldest_age_d:(((now - (.[-1].timestamp))/86400)|floor)} else {n:0} end'
     ```
-    (or fetch the wallet's earliest trade timestamp). If the wallet has
-    >~1000 lifetime trades OR first trade > 90 days ago → it is NOT
-    fresh. Relabel the alert from "hidden funding"/"fresh-wallet" to
-    "established wallet" and DEMOTE it (only keep if notional is large,
-    e.g. >$25k; otherwise drop). A genuinely fresh wallet (few trades,
-    recent first activity) with hidden funding stays as a top signal.
+    If `n >= 1000` (≥1000 lifetime trades) OR `oldest_age_d > 90` (first
+    trade >90 days ago) → the wallet is NOT fresh → DROP the alert (count
+    it as `est-wallet` in the footer). No "keep if >$25k" exception — an
+    established / high-frequency wallet's position size is not a fresh-
+    insider signal (the 0xb100…6461 case: 88k predictions, $28k, dropped).
+    A genuinely fresh wallet (few trades, recent first activity) with
+    hidden funding stays as a top signal.
 
 (d) HIGH-FREQUENCY (for the repeating-participants section only) — a
     wallet that appears across many signals because it trades 1000s of

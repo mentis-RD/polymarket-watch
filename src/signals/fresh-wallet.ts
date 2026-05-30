@@ -1,3 +1,5 @@
+import { request } from "undici";
+
 import type { PolyTrade } from "../clob-rest.js";
 import { getProfile, type WalletProfile } from "../wallet-profiler.js";
 import { canAlert, markAlerted } from "../alert-cooldown.js";
@@ -85,6 +87,49 @@ function sweepStaleWallets(): void {
   if (dropped > 0) log("fresh-wallet", `gc swept ${dropped} stale wallets, ${positions.size} remain`);
 }
 
+/**
+ * A "fresh wallet" alert must NOT fire on an ESTABLISHED wallet. The trap:
+ * `profile.age_days` (and path B's `age_days===null` "hidden funding" gate)
+ * is derived ONLY from the first $1k+ USDC inflow — so an old, high-frequency
+ * wallet funded via CEX / pUSD / another rail reads `age_days===null` and
+ * trips path B even though it is anything but fresh (the `0xb100…6461` case:
+ * registered 2024, ~10k trades in 45d, 88k lifetime predictions, yet flagged
+ * "fresh — hidden funding"). The profiler has no trade-history awareness, so
+ * we settle it here against the wallet's ACTUAL trades, using the same
+ * definition the digest's STEP 2.5c relabel uses: ≥1000 lifetime trades OR
+ * first trade > 90 days ago → established.
+ *
+ * Cost control: one data-api call, and ONLY when an alert would otherwise
+ * fire (after path A/B + cooldown). `established=true` is sticky-cached for
+ * the process (a wallet never gets newer), so a hyperactive wallet that trips
+ * path B across many events is probed at most once. On API error → treat as
+ * NOT established (fire) so a transient hiccup never suppresses a real signal.
+ */
+const ESTABLISHED_MIN_SAMPLED = 1000; // ≥1000 of the newest trades returned → ≥1000 lifetime
+const ESTABLISHED_MIN_AGE_DAYS = 90; // oldest sampled trade older than this → established
+const establishedCache = new Map<string, boolean>(); // wallet → true (sticky once established)
+
+async function isEstablishedWallet(wallet: string): Promise<boolean> {
+  if (establishedCache.get(wallet)) return true;
+  try {
+    const res = await request(
+      `https://data-api.polymarket.com/trades?user=${wallet}&limit=1000`,
+      { bodyTimeout: 10_000, headersTimeout: 8_000 },
+    );
+    if (res.statusCode !== 200) return false;
+    const arr = (await res.body.json()) as Array<{ timestamp?: number }>;
+    if (!Array.isArray(arr) || arr.length === 0) return false;
+    const sampled = arr.length;
+    const oldestTs = arr[arr.length - 1]?.timestamp; // data-api is newest-first → last = oldest
+    const ageDays = oldestTs ? (Date.now() / 1000 - oldestTs) / 86400 : 0;
+    const established = sampled >= ESTABLISHED_MIN_SAMPLED || ageDays > ESTABLISHED_MIN_AGE_DAYS;
+    if (established) establishedCache.set(wallet, true);
+    return established;
+  } catch {
+    return false;
+  }
+}
+
 interface AlertMeta {
   /** Parent event slug — signal aggregates 24h notional ACROSS all sub-markets of this event. */
   event_slug: string;
@@ -142,6 +187,14 @@ export async function handleEnrichedTrade(
 
   const key = `freshwallet:${wallet}:${meta.event_slug}`;
   if (!canAlert(key, COOLDOWN_MS)) return;
+
+  // Established-wallet guard: an old / high-frequency wallet whose missing
+  // USDC inflow is just non-USDC funding is NOT fresh — don't alert. Probed
+  // only here (alert-imminent), cached once established.
+  if (await isEstablishedWallet(wallet)) {
+    log("fresh-wallet", `skip established ${wallet} on ${meta.event_slug} (≥${ESTABLISHED_MIN_SAMPLED} trades or >${ESTABLISHED_MIN_AGE_DAYS}d old)`);
+    return;
+  }
 
   await fireAlert(trade, meta, profile, dominantNotional, dominantIdx, pathB);
   markAlerted(key);
