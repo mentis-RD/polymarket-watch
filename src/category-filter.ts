@@ -174,6 +174,13 @@ const SKIP_TAG_SLUGS: Set<string> = new Set([
   "unemployment",
   "nonfarm-payroll",
   "nfp",
+  // ISM / Markit PMI survey releases (services + manufacturing, per month).
+  // Same class as CPI/GDP/NFP: public macro data release, consensus already
+  // priced by macro desks, ISM/respondents don't bet on Polymarket. Both
+  // `ism-services-pmi-<month>` and `ism-manufacturing-pmi-<month>` carry the
+  // `pmi` + `ism` tags. Added 2026-05-30 (leaked into the daily digest).
+  "pmi",
+  "ism",
   // Entertainment auto-poll bracket families. Critic-aggregate scores,
   // Netflix Top-N viewership rankings, weekend box office numbers — all
   // public-data brackets that Polymarket factory-generates per release.

@@ -303,7 +303,17 @@ async function handleWatchDigest(msg: TGMessage): Promise<void> {
     await reply(msg, "❌ no new_events.jsonl on disk yet");
     return;
   }
-  const since = Date.now() - 24 * 60 * 60 * 1000;
+  // Anchor the window to the LAST DIGEST SNAPSHOT, not "now". The digest is a
+  // point-in-time send (window = [last_sent_ts-24h, last_sent_ts]); reading the
+  // live rolling window here would add events discovered AFTER the digest that
+  // the user never reviewed. Pin upper bound to last_sent_ts so "added" ⊆ what
+  // the digest showed. Fallback to now() only if no digest has been sent yet.
+  let upper = Date.now();
+  try {
+    const ld = JSON.parse(readFileSync(join(STATE_DIR, "last_digest.json"), "utf-8")) as { last_sent_ts?: number };
+    if (ld.last_sent_ts && Number.isFinite(ld.last_sent_ts)) upper = ld.last_sent_ts;
+  } catch { /* no digest yet → use now() */ }
+  const since = upper - 24 * 60 * 60 * 1000;
   const slugs: string[] = [];
   const seenSlugs = new Set<string>();
   try {
@@ -311,7 +321,7 @@ async function handleWatchDigest(msg: TGMessage): Promise<void> {
     for (const line of lines) {
       try {
         const r = JSON.parse(line) as { ts: number; event_slug: string; tags?: string };
-        if (r.ts < since) continue;
+        if (r.ts < since || r.ts > upper) continue;
         if (seenSlugs.has(r.event_slug)) continue; // dedup if event appeared multiple times in window
         const tagObjs = (r.tags || "").split("|").filter(Boolean).map((label) => ({ id: "", label, slug: "" }));
         if (isSkippedCategoryEvent(tagObjs, r.event_slug)) continue;
