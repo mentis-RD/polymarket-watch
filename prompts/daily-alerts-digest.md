@@ -139,27 +139,37 @@ A wallet that keeps hitting the SAME event + SAME side on multiple days
 within a week is ADDING to a conviction position — a stronger signal than
 a one-day spike. Detect and badge it.
 
-State file: `state/digest_wallet_history.json`, keyed by
-`<wallet>:<event_slug>:<YES|NO>` → { "days": { "<YYYY-MM-DD>": <end-of-day
-cost basis that day> } }. Load it at start (empty object if absent).
+**Do NOT do this bookkeeping by hand.** The cross-day state (load the
+history file, build the `<wallet>:<event_slug>:<SIDE>` key, diff prior
+days, record today, prune, save) is owned by a deterministic CLI —
+`src/digest-adders.ts` — so it can't break when a key is mis-cased or a
+save is forgotten. Your only job is to feed it each survivor's end-of-day
+cost basis (from the 2.5b reconcile) and read back the badges.
 
-For each fresh-wallet alert that SURVIVED the 2.5 filters:
-1. key = `<wallet>:<event_slug>:<side>`; today = the digest date.
-2. Look at history[key].days, drop any date older than 7 days.
-3. priorDays = the remaining dates that are NOT today.
-4. Record today: history[key].days[today] = end-of-day cost basis (from
-   the 2.6 reconcile). Save the file back at the very end (after send).
-5. If priorDays is non-empty → this is an ADDER:
-   - badge the line `🔁 добирает Nд` where N = total distinct days
-     (priorDays + today), e.g. 3д.
-   - cumulative buy = the CURRENT end-of-day cost basis (it already sums
-     every add — that IS the summary buy across the days). Show it as the
-     main amount, and append the day-progression of cost bases when it
-     fits, e.g. `($97k→$1.2M→$2.3M)`.
+1. Collect every fresh-wallet alert that SURVIVED the 2.5 filters into a
+   JSON array of `{wallet, event_slug, side, cost_basis}` where
+   `cost_basis` is the end-of-day cost basis from 2.5b and `side` is
+   `YES`/`NO`. Pipe it to the CLI with today's date:
+   ```
+   echo '{"date":"'"$(date -u +%Y-%m-%d)"'","alerts":[ ...the array... ]}' \
+     | npx tsx src/digest-adders.ts
+   ```
+   (If there are zero surviving fresh-wallet alerts, skip the call.)
+2. The CLI prints `{"adders":[ {wallet, event_slug, side, cost_basis,
+   is_adder, days, progression}, ... ]}` and has ALREADY updated +
+   pruned `state/digest_wallet_history.json` — you do NOT touch that file.
+3. For each returned alert with `is_adder: true`:
+   - badge the line `🔁 добирает Nд` where N = `days`.
+   - main amount = `cost_basis` (current end-of-day basis = the summary
+     buy across all the adds). Append the `progression` array as a
+     day-by-day trail when it fits, e.g. `($97k→$1.2M→$2.3M)`.
    - adders are high-conviction: sort them to the TOP of their theme.
+   Alerts with `is_adder: false` render as normal single-day lines.
 
-Prune: after updating, drop any history key whose every day is >7d old so
-the file doesn't grow unbounded.
+The CLI matches keys case-insensitively (wallet + side), keeps a rolling
+7-day window, is idempotent on a same-day re-run, and prunes stale keys —
+nothing for you to manage. Match alerts back to the CLI output by
+`(wallet, event_slug, side)`.
 
 Cluster events by inferred topic from titles + slugs. Heuristics:
 - iran|israel|hezbollah|hormuz|gaza         → 🇮🇷 Iran / Middle East
