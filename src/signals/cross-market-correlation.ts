@@ -195,6 +195,37 @@ function topSharedKeywords(cluster: MarketBet[], k = 3): string[] {
     .map(([w]) => w);
 }
 
+/**
+ * Market-maker / bot guard for the AUTO-ALERT path. A wallet that trades
+ * thousands of markets mechanically will trivially land ≥3 keyword-correlated
+ * markets by coincidence — that overlap is noise, not a coordinated
+ * cross-market thematic bet (the thing this signal exists to surface).
+ *
+ * The data-api caps historical `offset` at 3000, so this is the deepest
+ * lifetime probe available: a trade existing at offset 3000 means the wallet
+ * has >3000 lifetime trades. Cross-market is NOT a fresh-wallet signal, so the
+ * cutoff is deliberately permissive — fresh-wallet wants brand-new wallets;
+ * here we only exclude the extreme high-frequency tail (the `0xbacd…ab35`
+ * 278k-predictions class the user flagged). One cheap request per firing
+ * wallet. On any error / non-200 → treat as NOT high-freq (fire) so a
+ * transient API hiccup never silently suppresses a real signal.
+ */
+const MM_LIFETIME_OFFSET = 3000; // data-api hard cap; "wallet has >3000 lifetime trades"
+
+async function isHighFreqTrader(wallet: string): Promise<boolean> {
+  try {
+    const res = await request(
+      `https://data-api.polymarket.com/trades?user=${wallet}&limit=1&offset=${MM_LIFETIME_OFFSET}`,
+      { bodyTimeout: 10_000, headersTimeout: 8_000 },
+    );
+    if (res.statusCode !== 200) return false;
+    const arr = (await res.body.json()) as unknown;
+    return Array.isArray(arr) && arr.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 async function fireAlert(wallet: string, cluster: MarketBet[]): Promise<void> {
   const chat = process.env.TG_CHAT_MAIN;
   const thread = process.env.TG_THREAD_CLUSTER;
@@ -351,17 +382,29 @@ export async function runScan(): Promise<{ wallets_scanned: number; alerts: numb
 
   const perWallet = aggregatePerWallet(trades);
   let alerts = 0;
+  let mmSkipped = 0;
   for (const [wallet, marketsMap] of perWallet) {
     if (marketsMap.size < MIN_CLUSTER_SIZE) continue;
     const bets = [...marketsMap.values()];
     const clusters = findKeywordClusters(bets);
-    for (const cluster of clusters) {
+    // Only the clusters that pass the dominant-side + notional gates would fire.
+    const firing = clusters.filter((cluster) => {
       const dom = dominantSide(cluster);
-      if (dom.ratio < MIN_DOMINANT_SIDE) continue;
-      if (dom.notional < MIN_CLUSTER_NOTIONAL) continue;
+      return dom.ratio >= MIN_DOMINANT_SIDE && dom.notional >= MIN_CLUSTER_NOTIONAL;
+    });
+    if (firing.length === 0) continue;
+    // Market-maker / bot guard: ONE lifetime-depth probe per wallet, and only
+    // for wallets that would otherwise alert. Drop the extreme high-frequency
+    // tail whose multi-market overlap is mechanical, not coordinated.
+    if (await isHighFreqTrader(wallet)) {
+      mmSkipped++;
+      continue;
+    }
+    for (const cluster of firing) {
       await fireAlert(wallet, cluster);
       alerts++;
     }
   }
+  if (mmSkipped > 0) log("cross-market", `skipped ${mmSkipped} high-frequency wallet(s) (>${MM_LIFETIME_OFFSET} lifetime trades)`);
   return { wallets_scanned: perWallet.size, alerts };
 }

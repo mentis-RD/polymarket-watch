@@ -133,6 +133,20 @@ list is mostly noise without them.
     wallet may still appear in a theme section if its single position is
     notable, but never as a "repeating participant".
 
+(e) CROSS-MARKET MARKET-MAKER — drop any **cross-market (🔀)** alert whose
+    wallet is a high-frequency trader: its 3+ keyword-correlated markets
+    are mechanical coincidence, not a coordinated thematic bet. The live
+    signal now pre-filters these (>3000 lifetime trades), but log lines
+    fired before that shipped 2026-05-30 still surface here for 24h, so
+    enforce it. Probe lifetime depth (data-api caps offset at 3000):
+    ```
+    curl -s "https://data-api.polymarket.com/trades?user=<wallet>&limit=1&offset=3000" \
+      | jq 'if type=="array" then length else 0 end'
+    ```
+    If ≥1 (a trade exists at offset 3000 → >3000 lifetime trades) → DROP
+    the cross-market alert. Count drops for the footer. Applies to
+    cross-market only — fresh-wallet/cluster keep their own rules.
+
 === STEP 2.6: MULTI-DAY ACCUMULATION (cross-day persistence) ===
 
 A wallet that keeps hitting the SAME event + SAME side on multiple days
