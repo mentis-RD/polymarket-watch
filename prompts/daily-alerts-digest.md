@@ -51,6 +51,28 @@ cd /root/polymarket-watch && npx tsx src/cluster-cli.ts <event_slug>
 This is throttled (it queries positions per member); expect a few seconds
 per cluster event. Only re-review cluster events, not every alert.
 
+CROSS-MARKET RE-REVIEW (mandatory — the log line carries NO market slugs,
+only `<wallet> <N> markets, $<notional>`). DO NOT title the line from the
+wallet's positions: a wallet trades markets OUTSIDE its keyword cluster
+(and outside our watchlist), so its top overall position is usually the
+WRONG market. That guess mislabelled an Iran-uranium cluster as "Russia
+Kostyantynivka / Ukraine" and surfaced a "France win World Cup" title not
+in the cluster at all. Instead re-derive the ACTUAL cluster per unique
+cross-market wallet (re-runs keyword correlation + EOD position prune):
+```
+cd /root/polymarket-watch && npx tsx src/xmarket-cli.ts <wallet>
+```
+- If the output contains "decayed" or "no correlated-market cluster" →
+  the cluster is gone (markets sold / below threshold) → DROP it from the
+  digest. Do not list it. Count it as a dropped cross-market.
+- Otherwise parse the header `*N markets · *SIDE* R% · $X*` for the CURRENT
+  count / side / notional, and take the FIRST market bullet (rows are
+  sorted by held $ desc) as the cluster's TOP market. Use THAT market's
+  slug/title for the line text AND for theme grouping. NEVER title or
+  theme a cross-market line from a market not in this report.
+Throttled (one positions fetch per wallet); only re-review cross-market
+wallets, not every alert.
+
 Resolve event_slug → human title via Gamma (cache per unique slug, 200ms
 throttle):
 ```
