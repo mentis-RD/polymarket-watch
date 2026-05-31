@@ -535,16 +535,21 @@ async function detectClusters(eventSlug: string): Promise<DetectResult | null> {
     }
   }
 
-  // True-fanout pre-pass: collect every distinct shared funder / bridge-origin
-  // and resolve its REAL on-chain recipient fanout once, so pairwiseScore can
-  // neutralize edges through a shared conduit/disperser that the profiled-only
-  // getFunderFanout cap missed (the 0xaea4d1… case).
-  const originAddrs = new Set<string>();
+  // True-fanout pre-pass: resolve REAL on-chain recipient fanout so pairwiseScore
+  // can neutralize edges through a shared conduit/disperser the profiled-only
+  // getFunderFanout cap missed (the 0xaea4d1… case). ONLY probe addresses SHARED
+  // by ≥2 wallets — an origin/funder unique to one wallet can never form an edge,
+  // so probing it is wasted Alchemy load. This (plus the disk cache) is what
+  // keeps the digest's ~60-cluster review from bursting the pool into 429.
+  const originCount = new Map<string, number>();
   for (const a of wallets.values()) {
-    if (a.bridge_origin_wallet) originAddrs.add(a.bridge_origin_wallet);
-    if (a.first_inflow_from) originAddrs.add(a.first_inflow_from);
+    const addrs = new Set<string>();
+    if (a.bridge_origin_wallet) addrs.add(a.bridge_origin_wallet);
+    if (a.first_inflow_from) addrs.add(a.first_inflow_from);
+    for (const addr of addrs) originCount.set(addr, (originCount.get(addr) ?? 0) + 1);
   }
-  const highFanout = await markHighFanoutAddrs([...originAddrs]);
+  const sharedAddrs = [...originCount.entries()].filter(([, n]) => n >= 2).map(([a]) => a);
+  const highFanout = await markHighFanoutAddrs(sharedAddrs);
 
   const adj = new Map<string, Set<string>>();
   const pairScoreMap = new Map<string, PairScore>();
