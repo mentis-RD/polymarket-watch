@@ -1,6 +1,10 @@
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { request } from "undici";
 import { getProfile, getFunderFanout, type WalletProfile } from "../wallet-profiler.js";
 import { rpc } from "../alchemy-pool.js";
+import { writeJsonAtomic } from "../atomic-write.js";
 import { canAlert, markAlerted } from "../alert-cooldown.js";
 import { sendMessage } from "../telegram.js";
 import { escapeMd } from "../markdown.js";
@@ -51,18 +55,67 @@ const FUNDER_FANOUT_LIMIT = 20;
  * high-fanout. RPC error → left uncached (edge kept this scan, retried next) so
  * a hiccup never suppresses a real signal.
  */
-const onchainFanoutHigh = new Map<string, boolean>();
 const FANOUT_PROBE_MAX = "0x3e8"; // 1000 transfers — plenty to clear the limit
+const FANOUT_CACHE_PATH = join(process.cwd(), "state", "funder_fanout.json");
+const FANOUT_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // re-probe an address weekly
+
+/**
+ * PERSISTENT fanout cache, shared on disk across processes. Critical for the
+ * daily digest: cluster review spawns ~60 SEPARATE `cluster-cli` processes, so
+ * an in-memory cache wouldn't survive between them → each would re-probe the
+ * same shared funders via Alchemy, hammering the (shared, 5-key) pool into 429
+ * exhaustion (observed 2026-05-31: all 62 clusters left unverified). With a
+ * disk cache the long-running trade-enricher warms it all day, and the digest
+ * subprocesses mostly hit it. Merge-on-save (multi-writer: enricher + N
+ * cli procs). Entries carry a ts; re-probed after TTL since a low-fanout
+ * funder can grow.
+ */
+interface FanoutEntry { high: boolean; ts: number }
+const onchainFanout = new Map<string, FanoutEntry>();
+
+(function loadFanoutCache(): void {
+  try {
+    if (!existsSync(FANOUT_CACHE_PATH)) return;
+    const o = JSON.parse(readFileSync(FANOUT_CACHE_PATH, "utf-8")) as Record<string, FanoutEntry>;
+    for (const [k, v] of Object.entries(o)) {
+      if (v && typeof v.high === "boolean" && typeof v.ts === "number") onchainFanout.set(k, v);
+    }
+  } catch { /* cold start */ }
+})();
+
+function freshFanout(a: string, now: number): boolean | undefined {
+  const e = onchainFanout.get(a);
+  if (!e || now - e.ts > FANOUT_CACHE_TTL_MS) return undefined;
+  return e.high;
+}
+
+function saveFanoutCache(fresh: Record<string, FanoutEntry>): void {
+  try {
+    const disk: Record<string, FanoutEntry> = existsSync(FANOUT_CACHE_PATH)
+      ? (JSON.parse(readFileSync(FANOUT_CACHE_PATH, "utf-8")) as Record<string, FanoutEntry>)
+      : {};
+    for (const [k, v] of Object.entries(fresh)) {
+      if (!disk[k] || disk[k].ts < v.ts) disk[k] = v; // newest-ts wins (merge, don't clobber)
+    }
+    // prune entries older than 2×TTL so the file stays bounded
+    const cutoff = Date.now() - 2 * FANOUT_CACHE_TTL_MS;
+    for (const k of Object.keys(disk)) if (disk[k].ts < cutoff) delete disk[k];
+    writeJsonAtomic(FANOUT_CACHE_PATH, disk);
+  } catch { /* non-fatal */ }
+}
 
 async function markHighFanoutAddrs(addrs: string[]): Promise<Set<string>> {
   const high = new Set<string>();
+  const now = Date.now();
   const toCheck: string[] = [];
   for (const a of addrs) {
     if (!a) continue;
-    const cached = onchainFanoutHigh.get(a);
+    const cached = freshFanout(a, now);
     if (cached === undefined) toCheck.push(a);
     else if (cached) high.add(a);
   }
+  if (toCheck.length === 0) return high;
+  const fresh: Record<string, FanoutEntry> = {};
   await Promise.all(
     [...new Set(toCheck)].map(async (a) => {
       try {
@@ -72,14 +125,16 @@ async function markHighFanoutAddrs(addrs: string[]): Promise<Set<string>> {
           "polygon",
         );
         const recips = new Set((r?.transfers ?? []).map((t) => (t.to || "").toLowerCase()));
-        const isHigh = recips.size > FUNDER_FANOUT_LIMIT;
-        onchainFanoutHigh.set(a, isHigh);
-        if (isHigh) high.add(a);
+        const entry: FanoutEntry = { high: recips.size > FUNDER_FANOUT_LIMIT, ts: now };
+        onchainFanout.set(a, entry);
+        fresh[a] = entry;
+        if (entry.high) high.add(a);
       } catch {
         /* leave uncached → edge kept this scan, retried next */
       }
     }),
   );
+  if (Object.keys(fresh).length > 0) saveFanoutCache(fresh);
   return high;
 }
 
