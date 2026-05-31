@@ -231,8 +231,14 @@ Cluster events by inferred topic from titles + slugs. Heuristics:
 - trump-|biden-|powell-|warsh-              → 🇺🇸 US figures
 - everything else                            → 📦 Прочее
 
-Within a theme, sort by notional desc (where comparable), else by signal
-weight cluster > fresh-wallet > cross-market.
+Within a theme, do NOT use a single flat notional sort across all signal
+classes — fresh-wallet positions ($100k–$3M) will then bury every
+cross-market (🔀) and cluster (🔥) line (those are smaller-$ but distinct,
+rarer signals the user specifically wants to see). Instead ORDER by
+ROUND-ROBIN across the classes present, in weight order cluster (🔥) →
+fresh-wallet (🚨) → cross-market (🔀), each class sorted by notional
+internally: 1st of each class, then 2nd of each, etc. This guarantees the
+top of every present class appears before any class's tail.
 
 === STEP 4: cross-reference wallets ===
 
@@ -290,7 +296,12 @@ Constraints:
 - Money format: `$1.2k` / `$1.2M` / `$345`
 - Side bold UPPERCASE: `*YES*` / `*NO*`
 - Themes with empty content — пропускать
-- Theme >8 alerts: top-5 by notional + `_и ещё N_`
+- Theme >8 alerts: keep the first ~8 in the ROUND-ROBIN order above (so each
+  signal class present gets its top entries shown), then `_и ещё N_`. NEVER
+  let a flat notional cut hide every 🔀/🔥 line — if a class is present in the
+  theme, at least its top line MUST appear above the `_и ещё N_` fold.
+  (2026-05-31: 7 cross-market survived but a flat top-5-by-notional buried all
+  of them under fresh-wallet's $3.1M/$83k in the Iran theme → user saw none.)
 
 === STEP 6: send to TG ===
 
