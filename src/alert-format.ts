@@ -34,6 +34,32 @@ export function walletLink(addr: string): string {
   return `[${shortAddr(addr)}](https://polygonscan.com/address/${addr})`;
 }
 
+/** Explorer per chain id (EVM chain ids + Relay's synthetic non-EVM ids). */
+const EXPLORER: Record<number, { name: string; url: (a: string) => string }> = {
+  1: { name: "Ethereum", url: (a) => `https://etherscan.io/address/${a}` },
+  137: { name: "Polygon", url: (a) => `https://polygonscan.com/address/${a}` },
+  8453: { name: "Base", url: (a) => `https://basescan.org/address/${a}` },
+  42161: { name: "Arbitrum", url: (a) => `https://arbiscan.io/address/${a}` },
+  43114: { name: "Avalanche", url: (a) => `https://snowtrace.io/address/${a}` },
+  792703809: { name: "Solana", url: (a) => `https://solscan.io/account/${a}` },
+  728126428: { name: "Tron", url: (a) => `https://tronscan.org/#/address/${a}` },
+};
+
+/**
+ * Link a cross-chain funding ORIGIN to the RIGHT explorer + return its chain
+ * name. `bridge_origin_wallet` can live on Solana/Tron (base58, case-sensitive)
+ * or an EVM source chain — `walletLink` hardcodes polygonscan, which yields a
+ * broken link to a non-Polygon / non-hex address (the "faxwn6…3w5b on
+ * polygonscan" bug). Falls back to a non-linked code span for an unknown
+ * non-EVM chain rather than fabricating a wrong link.
+ */
+export function originLink(addr: string, chainId: number | null): { link: string; chain: string } {
+  const e = chainId != null ? EXPLORER[chainId] : undefined;
+  if (e) return { link: `[${shortAddr(addr)}](${e.url(addr)})`, chain: e.name };
+  if (addr.startsWith("0x")) return { link: walletLink(addr), chain: chainId ? `chain:${chainId}` : "" };
+  return { link: `\`${shortAddr(addr)}\``, chain: chainId ? `chain:${chainId}` : "non-EVM" };
+}
+
 /** `[label](https://polymarket.com/event/<slug>)`. Caller must pre-escape label. */
 export function eventLink(slug: string, label: string): string {
   return `[${label}](https://polymarket.com/event/${slug})`;

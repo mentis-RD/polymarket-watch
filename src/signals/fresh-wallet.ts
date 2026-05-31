@@ -4,7 +4,7 @@ import type { PolyTrade } from "../clob-rest.js";
 import { getProfile, type WalletProfile } from "../wallet-profiler.js";
 import { canAlert, markAlerted } from "../alert-cooldown.js";
 import { sendMessage } from "../telegram.js";
-import { eventLink, walletLink, fmtMoney, sideLabel, shortDate, EXTREME_PRICE_HIGH } from "../alert-format.js";
+import { eventLink, walletLink, originLink, fmtMoney, sideLabel, shortDate, EXTREME_PRICE_HIGH } from "../alert-format.js";
 import { FRESH_FUNDER_DAYS } from "../wallet-profiler.js";
 import { escapeMd } from "../markdown.js";
 import { log } from "../log.js";
@@ -243,13 +243,16 @@ async function fireAlert(
     // Unknown funder. Only call it "established" when it is genuinely aged;
     // a young-but-unresolved funder is a conduit whose exchange we couldn't
     // pin (dict gap or non-Polygon funding), not an established actor.
-    const link = walletLink(profile.bridge_origin_wallet);
+    // Chain-aware: the origin may be on Solana/Tron/another EVM chain — link to
+    // the RIGHT explorer (not polygonscan) and tag the chain.
+    const { link, chain } = originLink(profile.bridge_origin_wallet, profile.bridge_origin_chain ?? null);
+    const chainTag = chain ? ` _(${chain})_` : "";
     if (fAge !== null && fAge >= FRESH_FUNDER_DAYS) {
-      fundingTxt = `💰 funder ${link} · aged ${fAge}d ⚠️ established (watch)`;
+      fundingTxt = `💰 funder ${link}${chainTag} · aged ${fAge}d ⚠️ established (watch)`;
     } else if (fAge !== null) {
-      fundingTxt = `💰 funder ${link} · ${fAge}d (conduit, exchange unresolved)`;
+      fundingTxt = `💰 funder ${link}${chainTag} · ${fAge}d (conduit, exchange unresolved)`;
     } else {
-      fundingTxt = `💰 funder ${link}`;
+      fundingTxt = `💰 funder ${link}${chainTag}`;
     }
   } else if (profile.funding_source) {
     fundingTxt = `💰 via *${brand(profile.funding_source)}*`;

@@ -78,7 +78,10 @@ async function fetchEarliestRelayOrigin(
         const originRaw = dir === "recipient"
           ? (r.user || r.data?.metadata?.sender)
           : (r.data?.metadata?.sender || r.user);
-        const origin = (originRaw || "").toLowerCase();
+        // EVM addresses are case-insensitive → lowercase for dedup/matching.
+        // Solana/Tron origins are base58 and CASE-SENSITIVE → lowercasing
+        // corrupts them (breaks explorer links + identity). Preserve non-0x case.
+        const origin = (originRaw || "").startsWith("0x") ? (originRaw as string).toLowerCase() : (originRaw || "");
         if (!origin || origin === ZERO || origin === w) continue;
         return {
           user: origin,

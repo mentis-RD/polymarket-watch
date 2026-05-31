@@ -297,11 +297,12 @@ async function buildProfile(wallet: string): Promise<WalletProfile> {
         funding && funding.startsWith("bridge:") ? funding.slice("bridge:".length) : null;
       const origin = await fetchEarliestBridgeOrigin(bridgeName, lc);
       if (origin) {
-        bridge_origin_wallet = origin.user;
+        bridge_origin_wallet = origin.user; // original case (Solana/Tron base58 preserved)
         bridge_origin_chain = origin.chain_id;
         // Classify the origin too — Coinbase Base / Binance Solana would
-        // otherwise spuriously link hundreds of users.
-        bridge_origin_funding_source = classify(origin.user);
+        // otherwise spuriously link hundreds of users. classify() matches a
+        // lowercased dict, so lowercase the (possibly mixed-case) origin here.
+        bridge_origin_funding_source = classify(origin.user.toLowerCase());
 
         // Funder is an UNKNOWN wallet → decide conduit vs established.
         // - FRESH funder (< FRESH_FUNDER_DAYS): a throwaway pass-through
