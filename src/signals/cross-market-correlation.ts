@@ -2,7 +2,7 @@ import { request } from "undici";
 import { canAlert, markAlerted } from "../alert-cooldown.js";
 import { sendMessage } from "../telegram.js";
 import { escapeMd } from "../markdown.js";
-import { walletLink, marketLink, fmtMoney, sideLabel, EXTREME_PRICE_HIGH } from "../alert-format.js";
+import { walletLink, eventLink, fmtMoney, sideLabel, EXTREME_PRICE_HIGH } from "../alert-format.js";
 import { log } from "../log.js";
 import { getRecent, type EnrichedTrade } from "../enriched-store.js";
 
@@ -257,7 +257,7 @@ async function fireAlert(wallet: string, cluster: MarketBet[]): Promise<void> {
       const net = b.net_outcome0_notional - b.net_outcome1_notional;
       const dir = net >= 0 ? "YES" : "NO";
       const amt = fmtMoney(Math.abs(net));
-      return `• ${marketLink(b.slug, `\`${escapeMd(b.slug)}\``)} *${dir}* ${amt}`;
+      return `• ${eventLink(b.slug, `\`${escapeMd(b.slug)}\``)} *${dir}* ${amt}`;
     }),
     `→ \`/xmarket ${wallet}\``,
   ].join("\n");
@@ -369,7 +369,7 @@ export async function crossMarketReport(wallet: string): Promise<string> {
       })
       .sort((a, b) => b.amt - a.amt);
     for (const { b, side, amt } of rows) {
-      out.push(`• ${marketLink(b.slug, `\`${escapeMd(b.slug)}\``)} *${side === 0 ? "YES" : "NO"}* $${Math.round(amt).toLocaleString("en-US")}`);
+      out.push(`• ${eventLink(b.slug, `\`${escapeMd(b.slug)}\``)} *${side === 0 ? "YES" : "NO"}* $${Math.round(amt).toLocaleString("en-US")}`);
     }
   }
   if (shownClusters === 0) return `🔍 cross-market cluster for ${walletLink(w)} decayed — < ${MIN_CLUSTER_SIZE} markets still held ≥$${MIN_CURRENT_POSITION_USD}`;

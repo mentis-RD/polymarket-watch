@@ -4,7 +4,7 @@ import type { TradeEvent } from "../clob-ws.js";
 import { canAlert, markAlerted } from "../alert-cooldown.js";
 import { sendMessage } from "../telegram.js";
 import { escapeMd } from "../markdown.js";
-import { marketLink, fmtMoneyShort, shortDate, EXTREME_PRICE_HIGH } from "../alert-format.js";
+import { eventLink, fmtMoneyShort, shortDate, EXTREME_PRICE_HIGH } from "../alert-format.js";
 import { log } from "../log.js";
 
 /** Spike-event log the /spikes digest command reads (bot is a separate
@@ -193,8 +193,8 @@ export class VolumeSpikeDetector {
       ? ` · ${Math.round(info.sideRatio * 100)}% *${info.dominantSide.toUpperCase()}*`
       : "";
     const titleLink = meta
-      ? marketLink(slug, escapeMd(meta.question))
-      : marketLink(slug, `\`${escapeMd(slug)}\``);
+      ? eventLink(slug, escapeMd(meta.question))
+      : eventLink(slug, `\`${escapeMd(slug)}\``);
     const endTxt = meta?.end_date ? ` · ends ${shortDate(meta.end_date)}` : "";
     const text = [
       `🚨 *Volume spike · ${info.multiple.toFixed(1)}×*`,
@@ -300,7 +300,7 @@ export async function spikeDigest24h(): Promise<string> {
     for (const r of g.items.slice(0, 10)) {
       const title = titleCache.get(r.slug) || r.slug;
       const side = r.oneSided ? ` · ${Math.round(r.sideRatio * 100)}% *${r.dominantSide.toUpperCase()}*` : "";
-      out.push(`• ${marketLink(r.slug, escapeMd(title))} — *${r.multiple.toFixed(1)}×*${side}`);
+      out.push(`• ${eventLink(r.slug, escapeMd(title))} — *${r.multiple.toFixed(1)}×*${side}`);
     }
     if (g.items.length > 10) out.push(`_…и ещё ${g.items.length - 10}_`);
   }

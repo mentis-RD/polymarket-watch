@@ -29,9 +29,14 @@ export function shortAddr(addr: string): string {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
-/** `[0xab12…cd34](https://polygonscan.com/address/0xfull...)` clickable. */
+/**
+ * `[0xab12…cd34](polygonscan) [📊](preddy)` — the short address links to
+ * polygonscan (on-chain), plus a compact 📊 link to the wallet's Preddy
+ * profile (preddy.trade — a Polymarket terminal showing its positions/PnL),
+ * which is usually the more useful view for a Polymarket trader.
+ */
 export function walletLink(addr: string): string {
-  return `[${shortAddr(addr)}](https://polygonscan.com/address/${addr})`;
+  return `[${shortAddr(addr)}](https://polygonscan.com/address/${addr}) [📊](https://preddy.trade/profile/${addr})`;
 }
 
 /** Explorer per chain id (EVM chain ids + Relay's synthetic non-EVM ids). */
