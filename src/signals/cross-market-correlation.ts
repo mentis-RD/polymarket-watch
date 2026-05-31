@@ -12,7 +12,7 @@ const MIN_CLUSTER_SIZE = 3; // need ≥3 correlated markets
 const MIN_SHARED_KEYWORDS = 2; // need ≥2 overlapping keywords to link
 const MIN_DOMINANT_SIDE = 0.7; // ≥70% of notional on one side
 const MIN_CLUSTER_NOTIONAL = 1000; // wallet must risk ≥$1k across the cluster
-const COOLDOWN_MS = 12 * 60 * 60 * 1000;
+const COOLDOWN_MS = 48 * 60 * 60 * 1000; // was 12h → identical clusters re-fired ~twice/day
 
 /**
  * Common English/Polymarket slug tokens that carry no semantic load.
@@ -234,11 +234,16 @@ async function fireAlert(wallet: string, cluster: MarketBet[]): Promise<void> {
   const dom = dominantSide(cluster);
   const shared = topSharedKeywords(cluster);
 
-  // Cooldown keyed on wallet + sorted top-3 slugs (cluster "core") so that
-  // adding a 4th correlated market doesn't immediately re-alert. Cluster
-  // membership often grows by one over time.
+  // Cooldown keyed on wallet + sorted top-3 slugs (cluster "core") so adding a
+  // 4th correlated market doesn't immediately re-alert, PLUS a notional bucket
+  // (~50% growth steps) so the SAME cluster at the SAME size doesn't re-fire as
+  // a useless identical duplicate (2026-05-30: $32,003 cluster fired verbatim
+  // at 07:30 and 21:15 because the old 12h cooldown just elapsed). A materially
+  // grown position lands in a new bucket → new key → re-alerts under its own
+  // cooldown; an unchanged one stays quiet for the full 48h.
   const core = cluster.map((b) => b.slug).sort().slice(0, 3).join(",");
-  const cooldownKey = `xmarket:${wallet}:${core}`;
+  const notionalBucket = Math.floor(Math.log(Math.max(1, dom.notional)) / Math.log(1.5));
+  const cooldownKey = `xmarket:${wallet}:${core}:n${notionalBucket}`;
   if (!canAlert(cooldownKey, COOLDOWN_MS)) return;
 
   const kwTxt = shared.map((k) => `\`${escapeMd(k)}\``).join(", ") || "—";
