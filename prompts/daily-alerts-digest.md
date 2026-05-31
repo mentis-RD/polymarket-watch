@@ -7,20 +7,28 @@ the pipeline in the last 24h, then post to the daily-digest TG thread.
 
 === STEP 1: gather alerts ===
 
-Pull 24h of alert log lines (cluster + cross-market + fresh-wallet):
+Pull alert log lines (cluster + cross-market + fresh-wallet) and filter to
+the last 24h with the deterministic window gate — do NOT eyeball the
+timestamps yourself (an LLM mis-count once kept a 47h-old fresh-wallet line,
+re-surfacing a dormant $3.1M position as a live "добирает" signal):
 
 ```
 pm2 logs pmw-trade-enricher --nostream --lines 30000 2>&1 \
-  | grep -E '\[(cluster|cross-market|fresh-wallet)\] alert' > /tmp/alerts_te.log
+  | grep -E '\[(cluster|cross-market|fresh-wallet)\] alert' \
+  | npx tsx src/digest-window.ts 24 > /tmp/alerts_te.log
 ```
+
+`digest-window.ts` keeps only lines whose app-timestamp (the bracketed
+`[…Z]`) is within 24h. Treat `/tmp/alerts_te.log` as the COMPLETE in-window
+set — a wallet with no line here did NOT fire in the window and must NOT
+appear in the digest, no matter what `digest_wallet_history.json` shows
+(that file only ANNOTATES multi-day adders, it never re-injects a wallet).
 
 Smart-money cross-link (xlink) is intentionally disabled — skip.
 Volume-spike is NOT in this digest — it has its own on-demand command
 `/spikes` (24h themed spike digest). Do not gather or list spikes here.
 
-Parse the ISO timestamp at the start of each line, drop anything older
-than 24h. If total fired < 5 → send "тихий день — N сигналов" + bullets
-and exit.
+If total fired < 5 → send "тихий день — N сигналов" + bullets and exit.
 
 === STEP 2: enrich each alert ===
 
