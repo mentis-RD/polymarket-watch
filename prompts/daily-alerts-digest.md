@@ -251,34 +251,39 @@ high-frequency, omit the section.
 
 === STEP 5: format message ===
 
-Markdown V1 (legacy Telegram). Escape user data via \\_ \\* \\[ \\` in
-titles. Template:
+**HTML parse mode** (`parse_mode=HTML`). Escape ONLY `&` `<` `>` in text you
+did not author (market titles, slugs): `&`→`&amp;`, `<`→`&lt;`, `>`→`&gt;`.
+Do NOT backslash-escape anything else — `. - ( ) ! _ * [ ]` are all literal in
+HTML (this removes the MarkdownV1 escape bugs). Tags used: `<b>…</b>`,
+`<i>…</i>`, `<a href="URL">…</a>`, and `<blockquote expandable>…</blockquote>`
+for the collapsible footer. Template (CAPS = placeholders, no angle brackets):
 
 ```
-📰 *Дайджест сигналов · 24h*
-_<YYYY-MM-DD> 09:00 Europe/Berlin_
+📰 <b>Дайджест сигналов · 24h</b>
+<i>YYYY-MM-DD 09:00 Europe/Berlin</i>
 
-*🇮🇷 Iran / Middle East* (12)
-• 🔥 [Iran ceasefire continues through](https://polymarket.com/event/iran-...) — coord-cluster *8 wallets* · *NO* $124k held   ← post-review count/held from cluster-cli, NOT the stale log "cluster=37"
-• 🚨 [Israel-Iran peace deal by](https://polymarket.com/event/israel-...) — fresh-wallet [0xab12…cd34](https://polygonscan.com/address/0xfull) *NO* $16k (hidden funding, score 1)
-• 🚨 📈 scaled in [US x Iran peace deal](https://polymarket.com/event/us-x-iran-...) — fresh-wallet [0x0f02…5bfb](https://polygonscan.com/address/0xfull) *NO* $2.3M (hidden funding, score 1)   ← end-of-day cost basis, not the $97.6k alert snapshot
-• 🚨 🔁 добирает 3д [Iran regime falls](https://polymarket.com/event/iran-...) — fresh-wallet [0x9a01…77bc](https://polygonscan.com/address/0xfull) *YES* $840k ($120k→$410k→$840k) · via coinbase   ← same wallet+side hit 3 days running this week
+<b>🇮🇷 Iran / Middle East</b> (12)
+• 🔥 <a href="https://polymarket.com/event/iran-...">Iran ceasefire continues through</a> — coord-cluster <b>8 wallets</b> · <b>NO</b> $124k held   ← post-review count/held from cluster-cli, NOT the stale log "cluster=37"
+• 🚨 <a href="https://polymarket.com/event/israel-...">Israel-Iran peace deal by</a> — fresh-wallet <a href="https://polygonscan.com/address/0xFULL">0xab12…cd34</a> <a href="https://preddy.trade/profile/0xFULL">📊</a> <b>NO</b> $16k (hidden funding, score 1)
+• 🚨 📈 scaled in <a href="https://polymarket.com/event/us-x-iran-...">US x Iran peace deal</a> — fresh-wallet <a href="https://polygonscan.com/address/0xFULL">0x0f02…5bfb</a> <a href="https://preddy.trade/profile/0xFULL">📊</a> <b>NO</b> $2.3M (hidden funding, score 1)   ← end-of-day cost basis, not the alert snapshot
+• 🚨 🔁 добирает 3д <a href="https://polymarket.com/event/iran-...">Iran regime falls</a> — fresh-wallet <a href="https://polygonscan.com/address/0xFULL">0x9a01…77bc</a> <a href="https://preddy.trade/profile/0xFULL">📊</a> <b>YES</b> $840k ($120k→$410k→$840k) · via coinbase   ← same wallet+side hit 3 days running
+
+<b>🗳 Politics</b> (5)
 • ...
 
-*🗳 Politics* (5)
+<b>🔁 Повторяющиеся участники</b> (3)
+• <a href="https://polygonscan.com/address/0xFULL">0xab12…cd34</a> <a href="https://preddy.trade/profile/0xFULL">📊</a> — fresh-wallet (iran-leader-2026) + cross-market (3 events: ...)
 • ...
 
-*🚀 Crypto launches* (3)
-• ...
-
-*🔁 Повторяющиеся участники* (3)
-• [0xab12…cd34](https://polygonscan.com/address/0xfull) — fresh-wallet (iran-leader-2026) + cross-market (3 events: ...)
-• ...
-
-*Всего:* freshwallet=N · cluster=M · xmarket=K
-_отсеяно: exited N · extreme-price N · est-wallet N · decayed-clusters N_
-_суммы fresh-wallet = позиция на конец дня (cost basis), не снапшот алерта_
+<blockquote expandable>Всего: freshwallet=N · cluster=M · xmarket=K
+отсеяно: exited N · extreme-price N · est-wallet N · decayed-clusters N · decayed-xmarkets N
+суммы fresh-wallet = позиция на конец дня (cost basis), не снапшот алерта</blockquote>
 ```
+
+The whole footer (totals + `отсеяно` + the cost-basis note) goes INSIDE one
+`<blockquote expandable>…</blockquote>` so it renders COLLAPSED by default —
+the user taps to expand. Quote nothing else. The `<i>date</i>` subtitle and
+all theme bodies stay outside the quote.
 
 `cluster=M` in the total is the count of clusters that SURVIVED re-review
 (not the raw alert count); note dropped ones as `decayed-clusters N`.
@@ -291,15 +296,15 @@ button. The message body shows the post-review cluster line; the button
 does the live drill-in.
 
 Constraints:
-- Wallets ALWAYS as `[0xab12…cd34](polygonscan-url)` short clickable form
-- Event titles as `[title](polymarket-event-url)` clickable
+- Wallets ALWAYS as `<a href="polygonscan-url">0xab12…cd34</a> <a href="https://preddy.trade/profile/0xFULL">📊</a>` — short address → polygonscan, 📊 → the wallet's Preddy terminal (positions/PnL)
+- Event titles as `<a href="polymarket-event-url">title</a>` clickable
 - Money format: `$1.2k` / `$1.2M` / `$345`
-- Side bold UPPERCASE: `*YES*` / `*NO*`
+- Side bold UPPERCASE: `<b>YES</b>` / `<b>NO</b>`
 - Themes with empty content — пропускать
 - Theme >8 alerts: keep the first ~8 in the ROUND-ROBIN order above (so each
-  signal class present gets its top entries shown), then `_и ещё N_`. NEVER
+  signal class present gets its top entries shown), then `<i>и ещё N</i>`. NEVER
   let a flat notional cut hide every 🔀/🔥 line — if a class is present in the
-  theme, at least its top line MUST appear above the `_и ещё N_` fold.
+  theme, at least its top line MUST appear above the `<i>и ещё N</i>` fold.
   (2026-05-31: 7 cross-market survived but a flat top-5-by-notional buried all
   of them under fresh-wallet's $3.1M/$83k in the Iran theme → user saw none.)
 
@@ -330,7 +335,7 @@ Send via Bot API (attach reply_markup only if ≥1 cluster button exists):
 curl -s "https://api.telegram.org/bot$TG_TOKEN/sendMessage" \
   -d chat_id="$TG_CHAT_MAIN" \
   -d message_thread_id="$TG_THREAD_DIGEST" \
-  -d parse_mode=Markdown \
+  -d parse_mode=HTML \
   -d disable_web_page_preview=true \
   --data-urlencode text="$MESSAGE" \
   --data-urlencode reply_markup="$REPLY_MARKUP"
