@@ -107,28 +107,36 @@ list is mostly noise without them.
     alert number. (Real case 2026-05-29: alert said $97.6k but the
     wallet accumulated to $2.3M on us-x-iran NO through the day.)
 
-    Step 1 — get the event's conditionId(s). You already fetch the event
-    from Gamma for the title; grab its market conditionIds:
+    Step 1 — get the event's sub-markets (conditionId + slug). You already
+    fetch the event from Gamma for the title; grab each market's id AND slug:
     ```
     curl -s "https://gamma-api.polymarket.com/events?slug=<slug>" \
-      | jq -r '.[0].markets[].conditionId'
+      | jq -r '.[0].markets[] | "\(.conditionId)\t\(.slug)"'
     ```
 
-    Step 2 — fetch the wallet's live positions and sum the COST BASIS
-    across the matching conditionId(s) AND the alerted side (Yes/No):
+    Step 2 — fetch the wallet's live positions and get the COST BASIS PER
+    sub-market on the alerted side. **Do NOT sum across the event's
+    sub-markets** — for a date-laddered event, a NO bet on `…-by-may-31` and
+    `…-by-june-30` are DIFFERENT bets that resolve on different dates. Lumping
+    them yields a nonsensical cross-date progression (real case 2026-06-02:
+    `0x0f02…` showed `$3.1M→$179k` because its $3.1M May-31 NO bet resolved
+    and it re-bet $179k NO on June-30 — same event, different ladder rung):
     ```
     curl -s "https://data-api.polymarket.com/positions?user=<wallet>" \
       | jq --arg side "<NO|YES>" '
-        [ .[] | select(.conditionId=="<cond>")
-              | select((.outcome|ascii_upcase)==$side)
-              | (.initialValue // (.size*.avgPrice)) ] | add // 0'
+        [ .[] | select((.outcome|ascii_upcase)==$side)
+              | {cond:.conditionId, cb:(.initialValue // (.size*.avgPrice))} ]'
     ```
-    (initialValue = USD cost basis = what they actually put in; fall back
-    to size×avgPrice. Sum across all event sub-markets if multi-market.)
+    (initialValue = USD cost basis = what they actually put in; fall back to
+    size×avgPrice.) Keep only the rows whose `cond` is one of the event's
+    conditionIds, then pick the DOMINANT sub-market = the one with the largest
+    cost basis on the side.
 
-    Step 3 — REPLACE the displayed amount with this end-of-day cost basis.
-    This is the number that goes in the digest line, NOT the alert-time
-    notional. A wallet that scaled $97.6k → $2.3M now reads $2.3M.
+    Step 3 — the displayed amount = the DOMINANT sub-market's end-of-day cost
+    basis (NOT the alert-time notional, NOT an event-wide sum). Title the line
+    with that sub-market's dated slug (e.g. `…-by-june-30`) so it's clear WHICH
+    rung. Its slug is also the multi-day key in 2.6. A wallet that scaled
+    $97.6k → $2.3M on the SAME rung now reads $2.3M.
 
     Step 4 — drop if effectively exited: if the end-of-day cost basis is
     < 30% of the alert-time notional (sold most of it) OR < $1k absolute
@@ -190,22 +198,29 @@ within a week is ADDING to a conviction position — a stronger signal than
 a one-day spike. Detect and badge it.
 
 **Do NOT do this bookkeeping by hand.** The cross-day state (load the
-history file, build the `<wallet>:<event_slug>:<SIDE>` key, diff prior
+history file, build the `<wallet>:<market_slug>:<SIDE>` key, diff prior
 days, record today, prune, save) is owned by a deterministic CLI —
 `src/digest-adders.ts` — so it can't break when a key is mis-cased or a
 save is forgotten. Your only job is to feed it each survivor's end-of-day
 cost basis (from the 2.5b reconcile) and read back the badges.
 
+**The key's market component is the DOMINANT SUB-MARKET slug from 2.5b (the
+dated rung, e.g. `…-by-june-30`), NOT the event slug.** A wallet re-betting
+the same side on a DIFFERENT date rung of the same event is making a NEW bet,
+not adding — keying by sub-market makes it a fresh single-day line instead of
+a bogus `$3.1M→$179k` cross-date progression.
+
 1. Collect every fresh-wallet alert that SURVIVED the 2.5 filters into a
-   JSON array of `{wallet, event_slug, side, cost_basis}` where
-   `cost_basis` is the end-of-day cost basis from 2.5b and `side` is
-   `YES`/`NO`. Pipe it to the CLI with today's date:
+   JSON array of `{wallet, market_slug, side, cost_basis}` where `market_slug`
+   is the dominant sub-market slug (2.5b), `cost_basis` is that sub-market's
+   end-of-day cost basis, and `side` is `YES`/`NO`. Pipe it to the CLI with
+   today's date:
    ```
    echo '{"date":"'"$(date -u +%Y-%m-%d)"'","alerts":[ ...the array... ]}' \
      | npx tsx src/digest-adders.ts
    ```
    (If there are zero surviving fresh-wallet alerts, skip the call.)
-2. The CLI prints `{"adders":[ {wallet, event_slug, side, cost_basis,
+2. The CLI prints `{"adders":[ {wallet, market_slug, side, cost_basis,
    is_adder, days, progression}, ... ]}` and has ALREADY updated +
    pruned `state/digest_wallet_history.json` — you do NOT touch that file.
 3. For each returned alert with `is_adder: true`:
@@ -219,7 +234,7 @@ cost basis (from the 2.5b reconcile) and read back the badges.
 The CLI matches keys case-insensitively (wallet + side), keeps a rolling
 7-day window, is idempotent on a same-day re-run, and prunes stale keys —
 nothing for you to manage. Match alerts back to the CLI output by
-`(wallet, event_slug, side)`.
+`(wallet, market_slug, side)`.
 
 Cluster events by inferred topic from titles + slugs. Heuristics:
 - iran|israel|hezbollah|hormuz|gaza         → 🇮🇷 Iran / Middle East

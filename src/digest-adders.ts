@@ -20,7 +20,7 @@ import { writeJsonAtomic } from "./atomic-write.js";
  *
  * Usage (stdin = JSON, stdout = JSON):
  *   echo '{"date":"2026-05-30","alerts":[
- *     {"wallet":"0xABC","event_slug":"us-x-iran-...","side":"NO","cost_basis":3132430.62}
+ *     {"wallet":"0xABC","market_slug":"us-iran-nuclear-deal-by-june-30","side":"NO","cost_basis":3132430.62}
  *   ]}' | npx tsx src/digest-adders.ts [--dry-run]
  *
  * Output: the same alerts, each enriched with:
@@ -41,9 +41,18 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 interface InAlert {
   wallet: string;
-  event_slug: string;
+  // The MARKET identity for keying. For date-laddered events this is the
+  // DOMINANT SUB-MARKET slug (e.g. `…-by-june-30`), NOT the event slug — so a
+  // re-bet on a different date rung is a fresh key (fresh line), not a false
+  // cross-date progression. `event_slug` accepted as a back-compat alias.
+  market_slug?: string;
+  event_slug?: string;
   side: string;
   cost_basis: number;
+}
+
+function slugOf(a: InAlert): string {
+  return a.market_slug ?? a.event_slug ?? "";
 }
 interface Input {
   date: string; // YYYY-MM-DD (digest date, from `date -u +%Y-%m-%d`)
@@ -66,7 +75,7 @@ function dayToMs(d: string): number {
 
 /** Canonical, case-stable dedup key. */
 function makeKey(a: InAlert): string {
-  return `${a.wallet.toLowerCase()}:${a.event_slug}:${a.side.toUpperCase()}`;
+  return `${a.wallet.toLowerCase()}:${slugOf(a)}:${a.side.toUpperCase()}`;
 }
 
 function loadHistory(): History {
@@ -112,7 +121,7 @@ function main(): void {
   const out: OutAlert[] = [];
 
   for (const a of alerts) {
-    if (!a || !a.wallet || !a.event_slug || !a.side) continue;
+    if (!a || !a.wallet || !slugOf(a) || !a.side) continue;
     const key = makeKey(a);
     const entry: HistEntry = history[key] ?? { days: {} };
 
@@ -127,7 +136,7 @@ function main(): void {
     const sortedDates = Object.keys(entry.days).sort();
     out.push({
       wallet: a.wallet,
-      event_slug: a.event_slug,
+      market_slug: slugOf(a),
       side: a.side,
       cost_basis: a.cost_basis,
       is_adder: priorDays.length > 0,
