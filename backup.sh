@@ -26,12 +26,23 @@ if [ "$MODE" = "hourly" ]; then
   fi
 
   # Sync state/ files but exclude logs and ephemeral data.
-  rsync -a --delete \
+  # IMPORTANT: do NOT push large append-only / rotated logs or the big
+  # regenerable profile cache into the hourly GIT backup — committing GBs every
+  # hour ballooned the -state repo history to 9 GB and triggered OOM during git
+  # pack (2026-06-02). These are covered by the DAILY tar.gz instead.
+  # --delete-excluded also purges any such files already copied into the tree.
+  rsync -a --delete --delete-excluded \
     --exclude='*.log' \
     --exclude='*.out.log' \
     --exclude='*.err.log' \
     --exclude='deploy.lock' \
     --exclude='alerts/' \
+    --exclude='*.tmp' \
+    --exclude='*.tmp.*' \
+    --exclude='trades.jsonl' \
+    --exclude='trades_enriched.jsonl' \
+    --exclude='*.jsonl.*' \
+    --exclude='wallet_profiles.json' \
     state/ "$STATE_REPO_DIR/state/"
 
   # Also copy output CSVs.
@@ -49,14 +60,28 @@ if [ "$MODE" = "hourly" ]; then
 fi
 
 if [ "$MODE" = "daily" ]; then
+  # Disk hygiene: rotated trade logs (~200M each) are archives nothing reads —
+  # prune >2d old. And drop stale atomic-write temp files left by killed procs
+  # (OOM during a write leaves wallet_profiles.json.tmp.<pid> behind).
+  find state -maxdepth 1 -name 'trades*.jsonl.*' -mtime +2 -delete 2>/dev/null || true
+  find state -maxdepth 1 -name '*.tmp.*' -mmin +60 -delete 2>/dev/null || true
+
   TS=$(date -u +%Y%m%d-%H%M%S)
   ARCHIVE="/tmp/polymarket-watch-state-$TS.tar.gz"
+  # Exclude the big regenerable logs so the archive fits Telegram's 50 MB bot
+  # document limit (the old full tar was 173 MB and silently failed to upload).
+  # wallet_profiles.json is KEPT — it gzips to ~7 MB and is expensive to rebuild.
   tar -czf "$ARCHIVE" \
     --exclude='state/*.log' \
     --exclude='state/*.out.log' \
     --exclude='state/*.err.log' \
     --exclude='state/deploy.lock' \
     --exclude='state/alerts' \
+    --exclude='state/*.tmp' \
+    --exclude='state/*.tmp.*' \
+    --exclude='state/trades.jsonl' \
+    --exclude='state/trades_enriched.jsonl' \
+    --exclude='state/*.jsonl.*' \
     state output
 
   CHAT="${TG_CHAT_BACKUP:-$TG_CHAT_MAIN}"
