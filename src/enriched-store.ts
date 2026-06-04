@@ -64,13 +64,15 @@ function parseFile(p: string): EnrichedTrade[] {
 let liveRows: EnrichedTrade[] = [];
 let liveMtime = -1;
 const rotCache = new Map<string, EnrichedTrade[]>(); // immutable rotations, parsed once (filtered to RETAIN)
+let rotMerged: EnrichedTrade[] = []; // concat of all rotCache values, rebuilt only when the set changes
 let cached: EnrichedTrade[] = [];
-let lastBuildMs = 0;
+let lastRotScanMs = 0;
 
 function refresh(): void {
   const now = Date.now();
   const cutoff = now - RETAIN_MS;
-  let changed = false;
+  let liveChanged = false;
+  let rotChanged = false;
 
   // Live file — re-read on mtime change.
   if (existsSync(PATH)) {
@@ -79,39 +81,42 @@ function refresh(): void {
     if (m !== liveMtime) {
       liveRows = parseFile(PATH);
       liveMtime = m;
-      changed = true;
+      liveChanged = true;
     }
   } else if (liveRows.length) {
     liveRows = [];
     liveMtime = -1;
-    changed = true;
+    liveChanged = true;
   }
 
-  // Rotation files within retention — immutable, so load each exactly once.
-  let rotFiles: string[] = [];
-  try { rotFiles = readdirSync(dirname(PATH)).filter((f) => f.startsWith(ROT_PREFIX)); } catch { /* none */ }
-  for (const f of rotFiles) {
-    const ts = rotationTs(f);
-    if (!Number.isFinite(ts) || ts < cutoff) continue; // too old to matter
-    if (rotCache.has(f)) continue;
-    rotCache.set(f, parseFile(join(dirname(PATH), f)).filter((t) => t.ts >= cutoff));
-    changed = true;
-  }
-  // Evict rotations that vanished or aged past retention.
-  for (const f of [...rotCache.keys()]) {
-    const ts = rotationTs(f);
-    if (!rotFiles.includes(f) || !Number.isFinite(ts) || ts < cutoff) {
-      rotCache.delete(f);
-      changed = true;
+  // Rotation set — immutable files, so only re-scan the directory occasionally.
+  if (now - lastRotScanMs > REBUILD_EVERY_MS || rotCache.size === 0) {
+    lastRotScanMs = now;
+    let rotFiles: string[] = [];
+    try { rotFiles = readdirSync(dirname(PATH)).filter((f) => f.startsWith(ROT_PREFIX)); } catch { /* none */ }
+    for (const f of rotFiles) {
+      const ts = rotationTs(f);
+      if (!Number.isFinite(ts) || ts < cutoff) continue; // too old to matter
+      if (rotCache.has(f)) continue;
+      rotCache.set(f, parseFile(join(dirname(PATH), f)).filter((t) => t.ts >= cutoff));
+      rotChanged = true;
+    }
+    for (const f of [...rotCache.keys()]) {
+      const ts = rotationTs(f);
+      if (!rotFiles.includes(f) || !Number.isFinite(ts) || ts < cutoff) {
+        rotCache.delete(f);
+        rotChanged = true;
+      }
+    }
+    if (rotChanged) {
+      rotMerged = [];
+      for (const arr of rotCache.values()) for (const t of arr) rotMerged.push(t);
     }
   }
 
-  if (changed || now - lastBuildMs > REBUILD_EVERY_MS) {
-    const merged: EnrichedTrade[] = [];
-    for (const arr of rotCache.values()) for (const t of arr) if (t.ts >= cutoff) merged.push(t);
-    for (const t of liveRows) merged.push(t);
-    cached = merged;
-    lastBuildMs = now;
+  // Merge is a cheap concat; per-window age filtering is done in the getters.
+  if (liveChanged || rotChanged || cached.length === 0) {
+    cached = rotMerged.concat(liveRows);
   }
 }
 
