@@ -60,10 +60,14 @@ if [ "$MODE" = "hourly" ]; then
 fi
 
 if [ "$MODE" = "daily" ]; then
-  # Disk hygiene: rotated trade logs (~200M each) are archives nothing reads —
-  # prune >2d old. And drop stale atomic-write temp files left by killed procs
-  # (OOM during a write leaves wallet_profiles.json.tmp.<pid> behind).
-  find state -maxdepth 1 -name 'trades*.jsonl.*' -mtime +2 -delete 2>/dev/null || true
+  # Disk hygiene. Raw trades.jsonl rotations are unread archives → prune >2d.
+  # trades_enriched.jsonl rotations ARE read by the enriched-store (it loads
+  # them to cover the 7d cross-market / 48h cluster windows across a rotation),
+  # so keep them ≥10d — pruning these too early was starving every
+  # cluster/cross-market re-review (2026-06-04). And drop stale atomic-write
+  # temp files left by killed procs (wallet_profiles.json.tmp.<pid>).
+  find state -maxdepth 1 -name 'trades.jsonl.*' -mtime +2 -delete 2>/dev/null || true
+  find state -maxdepth 1 -name 'trades_enriched.jsonl.*' -mtime +10 -delete 2>/dev/null || true
   find state -maxdepth 1 -name '*.tmp.*' -mmin +60 -delete 2>/dev/null || true
 
   TS=$(date -u +%Y%m%d-%H%M%S)
