@@ -5,7 +5,7 @@ import { getProfile, type WalletProfile } from "../wallet-profiler.js";
 import { canAlert, markAlerted } from "../alert-cooldown.js";
 import { sendMessage } from "../telegram.js";
 import { eventLink, walletLink, originLink, fmtMoney, sideLabel, shortDate, EXTREME_PRICE_HIGH } from "../alert-format.js";
-import { isConsensusFavoriteBuy, isGatedMarket } from "../consensus-gates.js";
+import { isConsensusFavoriteBuy } from "../consensus-gates.js";
 import { FRESH_FUNDER_DAYS } from "../wallet-profiler.js";
 import { escapeMd } from "../markdown.js";
 import { log } from "../log.js";
@@ -147,16 +147,10 @@ export async function handleEnrichedTrade(
   meta: AlertMeta,
 ): Promise<void> {
   if (trade.side !== "BUY") return; // only count opens for now
-  // Skip near-certain bets — buying at >=95c means the market already priced it
-  // in, no informational edge. EXCEPTION: the YES side of a consensus-gated
-  // market ("event happens by date") is the insider direction and stays a
-  // signal at ANY price — never dropped for being expensive.
-  if (
-    trade.price >= EXTREME_PRICE_HIGH &&
-    !(trade.outcomeIndex === 0 && isGatedMarket(meta.event_slug, meta.sub_slug))
-  ) {
-    return;
-  }
+  // Skip near-certain bets — buying at >=95c means the market already
+  // priced it in, no informational edge. (Only the high end: a cheap buy
+  // at <=5c is a long-shot/contrarian position which CAN be informative.)
+  if (trade.price >= EXTREME_PRICE_HIGH) return;
 
   // Per-market consensus-side gate: on flagged "deal happens by date" markets
   // the NO favorite is consensus — only count it bought cheap (≤0.30). A NO buy

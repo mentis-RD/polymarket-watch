@@ -124,23 +124,6 @@ export function removeGate(pattern: string): { ok: boolean; reason?: string } {
   return { ok: true };
 }
 
-/**
- * True if ANY gate pattern matches the slug (regardless of side/price). Used to
- * exempt the YES side from the global extreme-price (≥0.95) cut on these
- * markets — on a gated "event happens by date" market the YES side ("it
- * happens") is the insider direction and must stay a signal at ANY price.
- */
-export function isGatedMarket(eventSlug: string, subSlug: string): boolean {
-  refresh();
-  for (const g of cached) {
-    try {
-      const re = new RegExp(g.pattern, "i");
-      if (re.test(eventSlug) || re.test(subSlug)) return true;
-    } catch { /* bad regex → skip */ }
-  }
-  return false;
-}
-
 /** All active gates (seed + user) for listing. */
 export function listGates(): { pattern: string; maxPrice: number; seed: boolean }[] {
   refresh();
