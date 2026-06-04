@@ -141,6 +141,30 @@ interface AlertMeta {
   risk_tag: string;
 }
 
+/**
+ * Per-market CONSENSUS-SIDE price gate. On low-base-rate "will X happen by
+ * <date>" markets (Middle-East peace deals, ceasefires, nuclear deals, Iran
+ * concessions), one side is the obvious favorite = pure consensus, NOT insider
+ * edge — a fresh wallet paying 0.87 for NO ("no deal") carries no signal. So on
+ * matched markets, count that side ONLY when bought CHEAP (≤maxPrice): the rare
+ * contrarian case where a deal looks all-but-announced and someone bets it
+ * still falls through. The OTHER side (cheap YES = "insider knows it's coming")
+ * stays a top signal, untouched. side: 0=YES, 1=NO. NOT global — extend this
+ * list per market family as you spot them (like category-filter.ts).
+ */
+const CONSENSUS_SIDE_GATES: { re: RegExp; side: 0 | 1; maxPrice: number }[] = [
+  // ME "unlikely concession happens by date" → NO ("it won't") is the favorite.
+  { re: /permanent-peace-deal|nuclear-deal|ceasefire|blockade-of-[a-z-]+-lifted|iran-agrees-to-/i, side: 1, maxPrice: 0.30 },
+];
+
+/** A BUY to IGNORE: the consensus-favorite side of a gated market, bought rich. */
+function isConsensusFavoriteBuy(eventSlug: string, subSlug: string, outcomeIndex: 0 | 1, price: number): boolean {
+  for (const g of CONSENSUS_SIDE_GATES) {
+    if (outcomeIndex === g.side && price > g.maxPrice && (g.re.test(eventSlug) || g.re.test(subSlug))) return true;
+  }
+  return false;
+}
+
 export async function handleEnrichedTrade(
   trade: PolyTrade,
   meta: AlertMeta,
@@ -150,6 +174,11 @@ export async function handleEnrichedTrade(
   // priced it in, no informational edge. (Only the high end: a cheap buy
   // at <=5c is a long-shot/contrarian position which CAN be informative.)
   if (trade.price >= EXTREME_PRICE_HIGH) return;
+
+  // Per-market consensus-side gate: on flagged "deal happens by date" markets
+  // the NO favorite is consensus — only count it bought cheap (≤0.30). A NO buy
+  // at 0.87 (the us-x-iran-peace-deal case) is dropped here.
+  if (isConsensusFavoriteBuy(meta.event_slug, meta.sub_slug, trade.outcomeIndex, trade.price)) return;
 
   sweepStaleWallets();
 
