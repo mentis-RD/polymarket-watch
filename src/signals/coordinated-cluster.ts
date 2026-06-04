@@ -256,7 +256,17 @@ function pairwiseScore(a: WalletAgg, b: WalletAgg, highFanout: Set<string>): Pai
     a.bridge_origin_wallet !== ZERO
   ) {
     const originBucket = categoryBucket(a.bridge_origin_funding_source);
-    if (
+    if (originBucket === "private" && !a.bridge_origin_wallet.startsWith("0x")) {
+      // Non-EVM origin (Solana/Tron, base58 — no 0x prefix). Our fanout probe
+      // is Polygon-only, so we CAN'T verify this isn't a shared exchange/bridge
+      // hot wallet that just isn't in our CEX dict — the common case for a
+      // non-EVM origin reaching Polymarket via a bridge. Unverifiable → no
+      // identity edge. Accepted tradeoff: misses a coordinator who funds Polygon
+      // burners from a PRIVATE Solana/Tron wallet (rare — coordination usually
+      // funds proxies from EVM). Classified non-EVM CEX still get the cex/swap
+      // weight below; only the unclassified "private" case is cut here.
+      factors.push(`shared-origin-skip:${a.bridge_origin_wallet.slice(0, 8)}…(non-evm)`);
+    } else if (
       originBucket === "private" &&
       (getFunderFanout(a.bridge_origin_wallet) > FUNDER_FANOUT_LIMIT || highFanout.has(a.bridge_origin_wallet))
     ) {
@@ -548,7 +558,11 @@ async function detectClusters(eventSlug: string): Promise<DetectResult | null> {
     if (a.first_inflow_from) addrs.add(a.first_inflow_from);
     for (const addr of addrs) originCount.set(addr, (originCount.get(addr) ?? 0) + 1);
   }
-  const sharedAddrs = [...originCount.entries()].filter(([, n]) => n >= 2).map(([a]) => a);
+  // Only probe EVM (0x) addresses on Polygon — a non-EVM origin returns empty
+  // and is neutralized directly in pairwiseScore (the `(non-evm)` branch).
+  const sharedAddrs = [...originCount.entries()]
+    .filter(([a, n]) => n >= 2 && a.startsWith("0x"))
+    .map(([a]) => a);
   const highFanout = await markHighFanoutAddrs(sharedAddrs);
 
   const adj = new Map<string, Set<string>>();
