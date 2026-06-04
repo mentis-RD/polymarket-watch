@@ -5,6 +5,7 @@ import { getProfile, type WalletProfile } from "../wallet-profiler.js";
 import { canAlert, markAlerted } from "../alert-cooldown.js";
 import { sendMessage } from "../telegram.js";
 import { eventLink, walletLink, originLink, fmtMoney, sideLabel, shortDate, EXTREME_PRICE_HIGH } from "../alert-format.js";
+import { isConsensusFavoriteBuy, isGatedMarket } from "../consensus-gates.js";
 import { FRESH_FUNDER_DAYS } from "../wallet-profiler.js";
 import { escapeMd } from "../markdown.js";
 import { log } from "../log.js";
@@ -141,39 +142,21 @@ interface AlertMeta {
   risk_tag: string;
 }
 
-/**
- * Per-market CONSENSUS-SIDE price gate. On low-base-rate "will X happen by
- * <date>" markets (Middle-East peace deals, ceasefires, nuclear deals, Iran
- * concessions), one side is the obvious favorite = pure consensus, NOT insider
- * edge — a fresh wallet paying 0.87 for NO ("no deal") carries no signal. So on
- * matched markets, count that side ONLY when bought CHEAP (≤maxPrice): the rare
- * contrarian case where a deal looks all-but-announced and someone bets it
- * still falls through. The OTHER side (cheap YES = "insider knows it's coming")
- * stays a top signal, untouched. side: 0=YES, 1=NO. NOT global — extend this
- * list per market family as you spot them (like category-filter.ts).
- */
-const CONSENSUS_SIDE_GATES: { re: RegExp; side: 0 | 1; maxPrice: number }[] = [
-  // ME "unlikely concession happens by date" → NO ("it won't") is the favorite.
-  { re: /permanent-peace-deal|nuclear-deal|ceasefire|blockade-of-[a-z-]+-lifted|iran-agrees-to-/i, side: 1, maxPrice: 0.30 },
-];
-
-/** A BUY to IGNORE: the consensus-favorite side of a gated market, bought rich. */
-function isConsensusFavoriteBuy(eventSlug: string, subSlug: string, outcomeIndex: 0 | 1, price: number): boolean {
-  for (const g of CONSENSUS_SIDE_GATES) {
-    if (outcomeIndex === g.side && price > g.maxPrice && (g.re.test(eventSlug) || g.re.test(subSlug))) return true;
-  }
-  return false;
-}
-
 export async function handleEnrichedTrade(
   trade: PolyTrade,
   meta: AlertMeta,
 ): Promise<void> {
   if (trade.side !== "BUY") return; // only count opens for now
-  // Skip near-certain bets — buying at >=95c means the market already
-  // priced it in, no informational edge. (Only the high end: a cheap buy
-  // at <=5c is a long-shot/contrarian position which CAN be informative.)
-  if (trade.price >= EXTREME_PRICE_HIGH) return;
+  // Skip near-certain bets — buying at >=95c means the market already priced it
+  // in, no informational edge. EXCEPTION: the YES side of a consensus-gated
+  // market ("event happens by date") is the insider direction and stays a
+  // signal at ANY price — never dropped for being expensive.
+  if (
+    trade.price >= EXTREME_PRICE_HIGH &&
+    !(trade.outcomeIndex === 0 && isGatedMarket(meta.event_slug, meta.sub_slug))
+  ) {
+    return;
+  }
 
   // Per-market consensus-side gate: on flagged "deal happens by date" markets
   // the NO favorite is consensus — only count it bought cheap (≤0.30). A NO buy

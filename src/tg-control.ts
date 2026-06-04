@@ -7,6 +7,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
 import { sendMessage, sendMessageReturningId, deleteMessage, setMyCommands } from "./telegram.js";
+import { addGate, removeGate, listGates } from "./consensus-gates.js";
 import { isSkippedCategoryEvent } from "./category-filter.js";
 import { clusterReport } from "./signals/coordinated-cluster.js";
 import { crossMarketReport } from "./signals/cross-market-correlation.js";
@@ -286,6 +287,42 @@ async function handleWl(msg: TGMessage): Promise<void> {
       return `• \`${escapeMd(s)}\` ${e.risk_tag}${subs}${end}${reason}`;
     });
   await reply(msg, `📋 watchlist (${slugs.length} events):\n${lines.join("\n")}`);
+}
+
+/**
+ * `/gate <slug-or-regex> [maxprice]` — add a market family to the fresh-wallet
+ * NO-consensus gate: on matched markets the NO side ("event won't happen") is
+ * counted ONLY when bought ≤ maxprice (default 0.30), since buying the NO
+ * favorite rich is consensus, not insider. YES is never gated, at any price.
+ */
+async function handleGate(msg: TGMessage, args: string[]): Promise<void> {
+  const pattern = args[0];
+  if (!pattern) {
+    await reply(msg, "usage: `/gate <slug-or-regex> [maxprice=0.30]`\nNO на совпавших рынках считается только при цене ≤ maxprice. YES не трогается.");
+    return;
+  }
+  const maxPrice = args[1] !== undefined ? Number(args[1]) : 0.3;
+  if (Number.isNaN(maxPrice)) { await reply(msg, "❌ maxprice не число"); return; }
+  const r = addGate(pattern, maxPrice);
+  await reply(msg, r.ok
+    ? `✅ гейт добавлен: \`${escapeMd(pattern)}\` → NO считается только при цене ≤ ${maxPrice}`
+    : `❌ не добавлен: ${r.reason}`);
+}
+
+/** `/gates` — list active NO-consensus gates (seed + user-added). */
+async function handleGates(msg: TGMessage): Promise<void> {
+  const gates = listGates();
+  if (gates.length === 0) { await reply(msg, "нет гейтов"); return; }
+  const lines = gates.map((g) => `• \`${escapeMd(g.pattern)}\` → NO ≤ ${g.maxPrice}${g.seed ? " _(seed)_" : ""}`);
+  await reply(msg, `🚧 *NO-consensus гейты* (NO считается только при низкой цене; YES не трогается):\n${lines.join("\n")}`);
+}
+
+/** `/ungate <pattern>` — remove a user-added gate (seed gates are permanent). */
+async function handleUngate(msg: TGMessage, args: string[]): Promise<void> {
+  const pattern = args[0];
+  if (!pattern) { await reply(msg, "usage: `/ungate <pattern>`"); return; }
+  const r = removeGate(pattern);
+  await reply(msg, r.ok ? `✅ удалён: \`${escapeMd(pattern)}\`` : `❌ ${r.reason}`);
 }
 
 /**
@@ -764,6 +801,15 @@ async function handleMessage(msg: TGMessage): Promise<void> {
       case "scanunknowns":
         await handleScanUnknowns(msg, parsed.args);
         break;
+      case "gate":
+        await handleGate(msg, parsed.args);
+        break;
+      case "gates":
+        await handleGates(msg);
+        break;
+      case "ungate":
+        await handleUngate(msg, parsed.args);
+        break;
       case "help":
       case "start":
         await handleHelp(msg);
@@ -885,6 +931,9 @@ void setMyCommands([
   { command: "spikes", description: "24h volume-spike digest (themed)" },
   { command: "profile", description: "wallet profile: /profile <0xwallet>" },
   { command: "scan_unknowns", description: "scan watchlist for fresh wallets with hidden funding" },
+  { command: "gate", description: "NO-consensus гейт: /gate <slug-or-regex> [maxprice] — NO считается только дёшево" },
+  { command: "gates", description: "список NO-consensus гейтов" },
+  { command: "ungate", description: "убрать гейт: /ungate <pattern>" },
   { command: "help", description: "show help" },
 ]);
 
