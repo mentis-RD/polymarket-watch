@@ -13,13 +13,18 @@ timestamps yourself (an LLM mis-count once kept a 47h-old fresh-wallet line,
 re-surfacing a dormant $3.1M position as a live "добирает" signal):
 
 ```
-pm2 logs pmw-trade-enricher --nostream --lines 30000 2>&1 \
-  | grep -E '\[(cluster|cross-market|fresh-wallet)\] alert' \
+grep -hE '\[(cluster|cross-market|fresh-wallet)\] alert' \
+  state/trade-enricher.out*.log 2>/dev/null \
   | npx tsx src/digest-window.ts 24 > /tmp/alerts_te.log
 ```
 
-`digest-window.ts` keeps only lines whose app-timestamp (the bracketed
-`[…Z]`) is within 24h. Treat `/tmp/alerts_te.log` as the COMPLETE in-window
+Read the pm2 LOG FILE on disk, NOT `pm2 logs --lines N`: the enricher emits
+~65k lines/day (mostly `[wallet-profiler] profiled …`), so `--lines 30000`
+only reached ~11h back and silently dropped alerts from the older half of the
+24h window (2026-06-04: 5 fresh-wallet fired, the digest showed 3 — 2 were
+beyond the line buffer). The `.out.log` file holds ~weeks; the glob also
+catches a rotated `.out-<date>.log`. `digest-window.ts` keeps only lines whose
+app-timestamp (the bracketed `[…Z]`) is within 24h. Treat `/tmp/alerts_te.log` as the COMPLETE in-window
 set — a wallet with no line here did NOT fire in the window and must NOT
 appear in the digest, no matter what `digest_wallet_history.json` shows
 (that file only ANNOTATES multi-day adders, it never re-injects a wallet).
