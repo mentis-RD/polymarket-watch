@@ -303,10 +303,30 @@ async function handleGate(msg: TGMessage, args: string[]): Promise<void> {
   }
   const maxPrice = args[1] !== undefined ? Number(args[1]) : 0.3;
   if (Number.isNaN(maxPrice)) { await reply(msg, "❌ maxprice не число"); return; }
+
+  // Breadth check: fresh-wallet fires on WATCHLIST markets, so show how many the
+  // pattern would gate (event slug OR any sub-market slug) and reject a clearly
+  // over-broad one. Catches an accidental wide pattern before it silently
+  // suppresses NO across unrelated markets.
+  let re: RegExp;
+  try { re = new RegExp(pattern, "i"); } catch { await reply(msg, "❌ невалидный regex"); return; }
+  const wl = watchlist.load();
+  const matched: string[] = [];
+  for (const [slug, e] of Object.entries(wl)) {
+    if (re.test(slug) || (e.sub_markets ?? []).some((sm) => re.test(sm.slug))) matched.push(slug);
+  }
+  if (matched.length > 20) {
+    await reply(msg, `❌ слишком широкий паттерн — матчит *${matched.length}* рынков вотчлиста. Уточни (полный слаг или конкретное семейство).`);
+    return;
+  }
+
   const r = addGate(pattern, maxPrice);
-  await reply(msg, r.ok
-    ? `✅ гейт добавлен: \`${escapeMd(pattern)}\` → NO считается только при цене ≤ ${maxPrice}`
-    : `❌ не добавлен: ${r.reason}`);
+  if (!r.ok) { await reply(msg, `❌ не добавлен: ${r.reason}`); return; }
+  const sample = matched.slice(0, 5).map((s) => `\`${escapeMd(s)}\``).join(", ");
+  const scope = matched.length === 0
+    ? "⚠️ 0 совпадений в текущем вотчлисте (паттерн на будущие рынки?)"
+    : `матчит ${matched.length}: ${sample}${matched.length > 5 ? " …" : ""}`;
+  await reply(msg, `✅ гейт добавлен: \`${escapeMd(pattern)}\` → NO считается только при цене ≤ ${maxPrice}\n${scope}`);
 }
 
 /** `/gates` — list active NO-consensus gates (seed + user-added). */

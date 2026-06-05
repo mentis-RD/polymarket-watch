@@ -98,6 +98,11 @@ export function isConsensusFavoriteBuy(
 export function addGate(pattern: string, maxPrice = DEFAULT_MAX_PRICE): { ok: boolean; reason?: string } {
   const p = pattern.trim();
   if (!p) return { ok: false, reason: "пустой паттерн" };
+  // Guard against accidental over-broad gates: a short pattern (e.g. "sis")
+  // matches a substring inside unrelated slugs (re-SIS-tant, cri-SIS, …). Slug
+  // fragments are long; require ≥6 chars. The breadth check in /gate (vs the
+  // watchlist) is the second layer for long-but-broad patterns.
+  if (p.length < 6) return { ok: false, reason: `слишком короткий паттерн ("${p}", <6) — рискует матчить случайные слаги` };
   try { new RegExp(p, "i"); } catch { return { ok: false, reason: "невалидный regex" }; }
   if (!(maxPrice > 0 && maxPrice < 1)) return { ok: false, reason: "цена должна быть 0..1" };
   if (SEED_PATTERNS.includes(p)) return { ok: false, reason: "уже в сиде (hardcoded)" };
