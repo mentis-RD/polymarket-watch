@@ -40,9 +40,12 @@ If total fired < 5 → send "тихий день — N сигналов" + bulle
 Per signal-type, extract from log line:
 - cluster:       `alert: <event_slug> cluster=<N>`
 - cross-market:  `alert: <wallet> <N> markets, $<notional>`
-  (append `→ /xmarket <wallet>` to each cross-market line so the user can
-  drill into the wallet's correlated markets + positions; the inline
-  buttons are reserved for clusters, this is the cross-market equivalent)
+  (append the drill-in command to each cross-market line wrapped in a
+  `<code>` tag — `→ <code>/xmarket &lt;wallet&gt;</code>` with the FULL 0x
+  address — so a tap COPIES the whole command (Telegram makes <code> blocks
+  tap-to-copy; a bare `/xmarket` would only send the command without the
+  address arg). The inline buttons are reserved for clusters, this is the
+  cross-market equivalent)
 - fresh-wallet:  `alert: <wallet> on event <event_slug> net=$<N> score=<S> path=<A|B>`
                  (path A = score-based, B = hidden-funding)
 
