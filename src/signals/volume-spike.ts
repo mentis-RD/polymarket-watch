@@ -337,8 +337,11 @@ export async function spikeThemeSummary24h(): Promise<string> {
     g.maxMult = Math.max(g.maxMult, r.multiple);
     byTheme.set(th.name, g);
   }
-  return [...byTheme.values()]
-    .sort((a, b) => b.count - a.count || b.maxMult - a.maxMult)
-    .map((g) => `${g.emoji} ${g.name} (${g.count})`)
-    .join(" · ");
+  // Drop the "Прочее" catch-all — it's not a market TYPE, just the unmatched
+  // tail, and it usually dominates the count without telling the user anything.
+  const named = [...byTheme.values()]
+    .filter((g) => g.name !== "Прочее")
+    .sort((a, b) => b.count - a.count || b.maxMult - a.maxMult);
+  if (named.length === 0) return "разное (без явной темы)";
+  return named.map((g) => `${g.emoji} ${g.name} (${g.count})`).join(" · ");
 }
