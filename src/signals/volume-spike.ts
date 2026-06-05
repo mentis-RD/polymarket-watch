@@ -307,3 +307,38 @@ export async function spikeDigest24h(): Promise<string> {
   out.push(`\n_Всего: ${recs.length} рынков_`);
   return out.join("\n");
 }
+
+/**
+ * One-line theme summary of 24h volume spikes for the daily digest — just the
+ * market TYPES where hype rose (with a per-theme spike count), NOT the full
+ * per-market list (that stays in /spikes). Sorted by count, then peak multiple.
+ * Returns "тихо" when there were no spikes.
+ */
+export async function spikeThemeSummary24h(): Promise<string> {
+  const { readFileSync, existsSync } = await import("node:fs");
+  if (!existsSync(SPIKES_LOG)) return "тихо";
+  const since = Date.now() - 24 * 60 * 60 * 1000;
+  const peak = new Map<string, SpikeRecord>();
+  for (const line of readFileSync(SPIKES_LOG, "utf-8").split("\n")) {
+    if (!line) continue;
+    let r: SpikeRecord;
+    try { r = JSON.parse(line) as SpikeRecord; } catch { continue; }
+    if (r.ts < since) continue;
+    const cur = peak.get(r.slug);
+    if (!cur || r.multiple > cur.multiple) peak.set(r.slug, r);
+  }
+  const recs = [...peak.values()];
+  if (recs.length === 0) return "тихо";
+  const byTheme = new Map<string, { emoji: string; name: string; count: number; maxMult: number }>();
+  for (const r of recs) {
+    const th = themeFor(r.slug, r.question || r.slug);
+    const g = byTheme.get(th.name) ?? { emoji: th.emoji, name: th.name, count: 0, maxMult: 0 };
+    g.count++;
+    g.maxMult = Math.max(g.maxMult, r.multiple);
+    byTheme.set(th.name, g);
+  }
+  return [...byTheme.values()]
+    .sort((a, b) => b.count - a.count || b.maxMult - a.maxMult)
+    .map((g) => `${g.emoji} ${g.name} (${g.count})`)
+    .join(" · ");
+}

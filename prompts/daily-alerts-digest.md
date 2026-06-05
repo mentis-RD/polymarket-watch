@@ -30,8 +30,16 @@ appear in the digest, no matter what `digest_wallet_history.json` shows
 (that file only ANNOTATES multi-day adders, it never re-injects a wallet).
 
 Smart-money cross-link (xlink) is intentionally disabled — skip.
-Volume-spike is NOT in this digest — it has its own on-demand command
-`/spikes` (24h themed spike digest). Do not gather or list spikes here.
+
+Volume-spike: do NOT list individual spikes (that's the on-demand `/spikes`
+command). But DO include a ONE-LINE theme summary near the top — just the
+market TYPES where hype rose in 24h, with a per-theme count. Get it from the
+deterministic CLI (do not compute it yourself):
+```
+cd /root/polymarket-watch && npx tsx src/spike-summary-cli.ts
+```
+It prints e.g. `🇮🇷 Iran / Middle East (8) · 🗳 Politics (4) · ₿ Crypto markets (3)`
+or `тихо`. Put it verbatim on the `📈 <b>Хайп за сутки:</b> …` line (STEP 5).
 
 If total fired < 5 → send "тихий день — N сигналов" + bullets and exit.
 
@@ -284,6 +292,8 @@ for the collapsible footer. Template (CAPS = placeholders, no angle brackets):
 ```
 📰 <b>Дайджест сигналов · 24h</b>
 <i>YYYY-MM-DD 09:00 Europe/Berlin</i>
+
+📈 <b>Хайп за сутки:</b> 🇮🇷 Iran / Middle East (8) · 🗳 Politics (4) · ₿ Crypto markets (3)
 
 <b>🇮🇷 Iran / Middle East</b> (12)
 • 🔥 <a href="https://polymarket.com/event/iran-...">Iran ceasefire continues through</a> — coord-cluster <b>8 wallets</b> · <b>NO</b> $124k held   ← post-review count/held from cluster-cli, NOT the stale log "cluster=37"
