@@ -31,36 +31,51 @@ interface KeyState {
   key: string;
   exhausted_at?: number;
   fail_count: number;
+  /** Reserve (paid) key — used ONLY when every free key is exhausted. */
+  reserve: boolean;
 }
 
 let pool: KeyState[] | null = null;
-let cursor = 0;
+let cursor = 0; // rotates over FREE keys only
 
 function getPool(): KeyState[] {
   if (pool) return pool;
-  const raw = process.env.ALCHEMY_KEYS || "";
-  const keys = raw.split(",").map((s) => s.trim()).filter(Boolean);
-  if (keys.length === 0) throw new Error("ALCHEMY_KEYS env var is empty");
-  pool = keys.map((key) => ({ key, fail_count: 0 }));
+  const parse = (raw: string) => (raw || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const free = parse(process.env.ALCHEMY_KEYS || "");
+  if (free.length === 0) throw new Error("ALCHEMY_KEYS env var is empty");
+  // Reserve keys are billed (paid plan) → kept out of normal rotation; only hit
+  // once every free key is rate-limited. Set ALCHEMY_KEYS_RESERVE to enable.
+  const reserve = parse(process.env.ALCHEMY_KEYS_RESERVE || "");
+  pool = [
+    ...free.map((key) => ({ key, fail_count: 0, reserve: false })),
+    ...reserve.map((key) => ({ key, fail_count: 0, reserve: true })),
+  ];
   return pool;
+}
+
+function usable(k: KeyState): boolean {
+  return !k.exhausted_at || Date.now() - k.exhausted_at > EXHAUSTED_RETRY_MS;
 }
 
 function pickKey(): KeyState {
   const p = getPool();
-  for (let i = 0; i < p.length; i++) {
-    const idx = (cursor + i) % p.length;
-    const k = p[idx];
-    if (!k.exhausted_at || Date.now() - k.exhausted_at > EXHAUSTED_RETRY_MS) {
-      cursor = (idx + 1) % p.length;
-      return k;
+  const free = p.filter((k) => !k.reserve);
+  const reserve = p.filter((k) => k.reserve);
+  // 1. round-robin a usable FREE key.
+  for (let i = 0; i < free.length; i++) {
+    const idx = (cursor + i) % free.length;
+    if (usable(free[idx])) {
+      cursor = (idx + 1) % free.length;
+      return free[idx];
     }
   }
-  // All exhausted — pick the one whose cooldown is earliest expiring.
-  let oldest = p[0];
-  for (const k of p) {
-    if ((k.exhausted_at ?? 0) < (oldest.exhausted_at ?? 0)) oldest = k;
-  }
-  cursor = (p.indexOf(oldest) + 1) % p.length;
+  // 2. all free exhausted → a usable RESERVE (paid) key.
+  for (const k of reserve) if (usable(k)) return k;
+  // 3. everything exhausted → earliest-expiring, FREE preferred (so a recovering
+  //    free key is chosen over burning paid credits on a tie).
+  const ordered = [...free, ...reserve];
+  let oldest = ordered[0];
+  for (const k of ordered) if ((k.exhausted_at ?? 0) < (oldest.exhausted_at ?? 0)) oldest = k;
   return oldest;
 }
 
@@ -136,10 +151,13 @@ function maskKey(k: string): string {
   return k.slice(0, 3) + "…" + k.slice(-3);
 }
 
-export function poolStatus(): { keys: number; exhausted: number } {
+export function poolStatus(): { keys: number; free: number; reserve: number; exhausted: number } {
   const p = getPool();
+  const isExhausted = (k: KeyState) => k.exhausted_at && Date.now() - k.exhausted_at < EXHAUSTED_RETRY_MS;
   return {
     keys: p.length,
-    exhausted: p.filter((k) => k.exhausted_at && Date.now() - k.exhausted_at < EXHAUSTED_RETRY_MS).length,
+    free: p.filter((k) => !k.reserve).length,
+    reserve: p.filter((k) => k.reserve).length,
+    exhausted: p.filter(isExhausted).length,
   };
 }
