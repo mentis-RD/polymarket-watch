@@ -5,6 +5,7 @@ import { escapeMd } from "../markdown.js";
 import { walletLink, eventLink, fmtMoney, sideLabel, EXTREME_PRICE_HIGH } from "../alert-format.js";
 import { log } from "../log.js";
 import { getRecent, type EnrichedTrade } from "../enriched-store.js";
+import { isConsensusFavoriteBuy } from "../consensus-gates.js";
 
 const WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const MIN_MARKET_NOTIONAL = 100; // ignore dust positions
@@ -65,7 +66,7 @@ function tokenizeSlug(slug: string): Set<string> {
   return out;
 }
 
-function aggregatePerWallet(trades: EnrichedTrade[]): Map<string, Map<string, MarketBet>> {
+function aggregatePerWallet(trades: EnrichedTrade[], applyGate = false): Map<string, Map<string, MarketBet>> {
   // wallet → event_slug → MarketBet (aggregated across all sub-markets
   // of the event). Falls back to sub-market slug for old data without
   // event_slug. Cross-market correlation between EVENTS is much more
@@ -74,6 +75,11 @@ function aggregatePerWallet(trades: EnrichedTrade[]): Map<string, Map<string, Ma
   for (const t of trades) {
     // Skip near-certain BUYs (>=95c) — no edge.
     if (t.side === "BUY" && t.price >= EXTREME_PRICE_HIGH) continue;
+    // Consensus-side gate (live alerts only): on a gated "event happens by date"
+    // market, a rich NO BUY is consensus, not edge — don't let it build a
+    // cross-market cluster. Cheap NO / any YES still count. Off for the /xmarket
+    // on-demand report (raw view of what the user explicitly asked for).
+    if (applyGate && t.side === "BUY" && isConsensusFavoriteBuy(t.event_slug ?? t.slug, t.slug, t.outcomeIndex, t.price)) continue;
     const w = t.wallet.toLowerCase();
     let perWallet = out.get(w);
     if (!perWallet) {
@@ -385,7 +391,7 @@ export async function runScan(): Promise<{ wallets_scanned: number; alerts: numb
   const trades = getRecent(WINDOW_MS);
   if (trades.length === 0) return { wallets_scanned: 0, alerts: 0 };
 
-  const perWallet = aggregatePerWallet(trades);
+  const perWallet = aggregatePerWallet(trades, true); // apply consensus gate on the alert path
   let alerts = 0;
   let mmSkipped = 0;
   for (const [wallet, marketsMap] of perWallet) {
