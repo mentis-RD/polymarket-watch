@@ -2,7 +2,7 @@ import { readFileSync, existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { writeJsonAtomic } from "./atomic-write.js";
-import { rpc } from "./alchemy-pool.js";
+import { tokenTx, txUsd } from "./etherscan.js";
 import { classify, categoryBucket, type FundingCategory } from "./funding-source.js";
 import { fetchEarliestBridgeOrigin } from "./bridge-tracer.js";
 import { log, err } from "./log.js";
@@ -29,7 +29,7 @@ const USDC_CONTRACTS = [USDC_E, USDC_NATIVE, PUSD];
  * Per-chain USD-stable contract sets for the funder-resolve scan. A conduit
  * can be fed on any chain (e.g. via Hyperliquid on Arbitrum), so resolving
  * the exchange behind it requires scanning the right chain's USDC variants.
- * Alchemy pool is now multichain (rpc(..., chain)).
+ * Resolved via Etherscan V2 tokentx (chainid param) — free indexed history.
  */
 const STABLES_BY_CHAIN: Record<string, string[]> = {
   polygon: [USDC_E, USDC_NATIVE, PUSD],
@@ -201,23 +201,32 @@ function computeScore(ageDays: number | null): number {
 }
 
 async function fetchEarliestUsdcInflow(wallet: string): Promise<AssetTransfer | null> {
-  const params = {
-    toAddress: wallet,
-    contractAddresses: USDC_CONTRACTS,
-    category: ["erc20"],
-    order: "asc",
-    maxCount: "0x64", // 100
-    withMetadata: true,
-    excludeZeroValue: true,
-  };
-  const result = await rpc<{ transfers: AssetTransfer[]; pageKey?: string }>(
-    "alchemy_getAssetTransfers",
-    [params],
-  );
-  for (const t of result.transfers || []) {
-    if (typeof t.value === "number" && t.value >= MEANINGFUL_USDC) return t;
+  // Oldest ≥$1k USDC/pUSD inflow on Polygon, via Etherscan V2 tokentx (indexed,
+  // sorted asc). One call per stable contract; keep the earliest hit across them.
+  let best: AssetTransfer | null = null;
+  let bestTs = Infinity;
+  for (const contract of USDC_CONTRACTS) {
+    const rows = await tokenTx({ chain: "polygon", address: wallet, contractaddress: contract, sort: "asc", offset: 100 });
+    for (const r of rows) {
+      if ((r.to || "").toLowerCase() !== wallet) continue; // inflow only
+      if (txUsd(r) < MEANINGFUL_USDC) continue;
+      const ts = Number(r.timeStamp);
+      if (ts < bestTs) {
+        bestTs = ts;
+        best = {
+          blockNum: r.blockNumber,
+          hash: r.hash,
+          from: r.from,
+          to: r.to,
+          value: txUsd(r),
+          asset: r.tokenSymbol,
+          metadata: { blockTimestamp: new Date(ts * 1000).toISOString() },
+        };
+      }
+      break; // rows are asc → first qualifying is this contract's oldest
+    }
   }
-  return null;
+  return best;
 }
 
 /** A funder younger than this (days) is treated as a throwaway one-time
@@ -242,28 +251,17 @@ async function fetchFirstExchangeSender(
   for (const chain of chains) {
     const tokens = STABLES_BY_CHAIN[chain];
     if (!tokens) continue;
-    try {
-      const result = await rpc<{ transfers: AssetTransfer[] }>(
-        "alchemy_getAssetTransfers",
-        [{
-          toAddress: wallet,
-          contractAddresses: tokens,
-          category: ["erc20"],
-          order: "asc",
-          maxCount: "0x32",
-          withMetadata: false,
-          excludeZeroValue: true,
-        }],
-        chain,
-      );
-      for (const t of result.transfers || []) {
-        if (typeof t.value !== "number" || t.value < MEANINGFUL_USDC) continue;
-        const cat = classify((t.from || "").toLowerCase());
+    // Oldest stable inflows on this chain (Etherscan V2), one call per stable;
+    // return on the first sender that classifies as a known exchange.
+    for (const contract of tokens) {
+      const rows = await tokenTx({ chain, address: wallet, contractaddress: contract, sort: "asc", offset: 25 });
+      for (const r of rows) {
+        if ((r.to || "").toLowerCase() !== wallet) continue; // inflow only
+        if (txUsd(r) < MEANINGFUL_USDC) continue;
+        const cat = classify((r.from || "").toLowerCase());
         const bucket = categoryBucket(cat);
         if (bucket === "cex" || bucket === "swap" || bucket === "fiat") return cat;
       }
-    } catch {
-      // chain may not be enabled on the key, or transient — try next chain.
     }
   }
   return null;

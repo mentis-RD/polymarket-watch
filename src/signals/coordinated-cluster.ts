@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { request } from "undici";
 import { getProfile, getFunderFanout, type WalletProfile } from "../wallet-profiler.js";
-import { rpc } from "../alchemy-pool.js";
+import { tokenTx } from "../etherscan.js";
 import { writeJsonAtomic } from "../atomic-write.js";
 import { canAlert, markAlerted } from "../alert-cooldown.js";
 import { sendMessage } from "../telegram.js";
@@ -50,12 +50,12 @@ const FUNDER_FANOUT_LIMIT = 20;
  * doesn't separate a coordinator's distribution wallet from infrastructure.
  * Recipient fanout does.
  *
- * Memoized for the process. One alchemy_getAssetTransfers (1 page) per distinct
+ * Memoized for the process. One Etherscan tokentx call per distinct
  * origin; ≥21 distinct recipients in that page is enough to conclude
  * high-fanout. RPC error → left uncached (edge kept this scan, retried next) so
  * a hiccup never suppresses a real signal.
  */
-const FANOUT_PROBE_MAX = "0x3e8"; // 1000 transfers — plenty to clear the limit
+const FANOUT_PROBE_ROWS = 1000; // recent outgoing token transfers to scan for distinct recipients
 const FANOUT_CACHE_PATH = join(process.cwd(), "state", "funder_fanout.json");
 const FANOUT_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // re-probe an address weekly
 
@@ -119,12 +119,13 @@ async function markHighFanoutAddrs(addrs: string[]): Promise<Set<string>> {
   await Promise.all(
     [...new Set(toCheck)].map(async (a) => {
       try {
-        const r = await rpc<{ transfers?: Array<{ to?: string }> }>(
-          "alchemy_getAssetTransfers",
-          [{ fromAddress: a, category: ["erc20", "external"], maxCount: FANOUT_PROBE_MAX, order: "asc", withMetadata: false, excludeZeroValue: true }],
-          "polygon",
+        // Distinct recipients this funder SENT to (Etherscan V2 tokentx, recent
+        // outgoing). >LIMIT distinct = shared conduit/disperser, not a coordinator.
+        const al = a.toLowerCase();
+        const rows = await tokenTx({ chain: "polygon", address: al, sort: "desc", offset: FANOUT_PROBE_ROWS });
+        const recips = new Set(
+          rows.filter((t) => (t.from || "").toLowerCase() === al).map((t) => (t.to || "").toLowerCase()),
         );
-        const recips = new Set((r?.transfers ?? []).map((t) => (t.to || "").toLowerCase()));
         const entry: FanoutEntry = { high: recips.size > FUNDER_FANOUT_LIMIT, ts: now };
         onchainFanout.set(a, entry);
         fresh[a] = entry;
