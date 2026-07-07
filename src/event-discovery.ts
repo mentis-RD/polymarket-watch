@@ -97,10 +97,18 @@ async function discoveryCycle(): Promise<void> {
   const coldStart = Object.keys(seen).length === 0;
   const now = Date.now();
 
+  // Fetch NEWEST-CREATED events first (startDate desc). New events are what we
+  // detect, and Gamma dropped its offset cap to ~2-4k (2026-07) — deep endDate
+  // pagination now 422s AND would miss new events with far-out end dates. By
+  // creation order they sit on the first pages, so ~30 pages (≤ the cap) covers
+  // well over an hour of new events regardless of end date. The offset-cap catch
+  // in fetchOpenEvents stops gracefully if we overshoot.
   const all = await fetchOpenEvents({
-    maxPages: coldStart ? 200 : 50,
+    maxPages: 30,
     pageSize: 100,
     pageDelayMs: 200,
+    order: "startDate",
+    ascending: false,
   });
 
   const newOnes: PolyEventFull[] = [];

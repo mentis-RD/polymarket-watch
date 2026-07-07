@@ -280,10 +280,14 @@ export async function fetchOpenEvents(opts: {
   maxPages?: number;
   pageSize?: number;
   pageDelayMs?: number;
+  order?: string;
+  ascending?: boolean;
 } = {}): Promise<PolyEventFull[]> {
   const maxPages = opts.maxPages ?? 200;
   const pageSize = opts.pageSize ?? 100;
   const delay = opts.pageDelayMs ?? 200;
+  const order = opts.order ?? "endDate";
+  const ascending = opts.ascending ?? true;
   const out: PolyEventFull[] = [];
   for (let i = 0; i < maxPages; i++) {
     let page: PolyEventFull[];
@@ -292,11 +296,14 @@ export async function fetchOpenEvents(opts: {
         limit: pageSize,
         offset: i * pageSize,
         closed: false,
-        order: "endDate",
-        ascending: true,
+        order,
+        ascending,
       });
     } catch (e) {
-      if (((e as Error).message || "").includes("offset exceeds maximum")) {
+      const m = (e as Error).message || "";
+      // Gamma caps offset (dropped ~10k → ~2-4k in 2026-07 and changed the error
+      // text to "offset too large, use /events/keyset"). Stop gracefully on both.
+      if (/offset exceeds maximum|offset too large|keyset/i.test(m)) {
         log("gamma", `events: hit offset cap at page ${i + 1} (${out.length} events); stopping`);
         break;
       }
