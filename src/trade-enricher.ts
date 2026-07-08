@@ -197,12 +197,23 @@ async function pollLoop(): Promise<void> {
         } catch (e) {
           err("trade-enricher", `cluster check ${eventSlug} failed`, (e as Error).message);
         }
+        // Same mid-phase heartbeat as the poll loop: cluster-checking ~800
+        // events (each with on-chain wallet lookups) takes well over 5 min, so
+        // without this the watchdog false-alarms the enricher as dead.
+        if (Date.now() - lastHb > HB_INTERVAL_MS) {
+          heartbeat("trade-enricher", { events: Object.keys(wl).length, sub_markets: subs.length, phase: "cluster", cycle: cycleNum, in_cycle: true });
+          lastHb = Date.now();
+        }
       }
     }
 
     // Cross-market correlation scan across ALL enriched activity (not just
     // watchlist) — heavier, less frequent.
     if (cycleNum % CROSS_MARKET_CHECK_EVERY_CYCLES === 0) {
+      // Beat before the (single, potentially multi-minute) scan so the gap from
+      // the last cluster/poll beat to the next cycle-end beat can't go stale.
+      heartbeat("trade-enricher", { events: Object.keys(wl).length, sub_markets: subs.length, phase: "xmarket", cycle: cycleNum, in_cycle: true });
+      lastHb = Date.now();
       try {
         const r = await runCrossMarketScan();
         log("trade-enricher", `cross-market: scanned ${r.wallets_scanned} wallets, ${r.alerts} alerts`);

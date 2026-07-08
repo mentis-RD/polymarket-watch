@@ -23,7 +23,7 @@ const PROCESSES: ProcessSpec[] = [
   { name: "digest", maxAgeMs: 10 * 60 * 1000 }, // 10 min (ticks every 1 min)
   { name: "tg-control", maxAgeMs: 5 * 60 * 1000 }, // 5 min (long-poll heartbeats per cycle)
   { name: "market-monitor", maxAgeMs: 5 * 60 * 1000 }, // 5 min (ticks every 1 min)
-  { name: "trade-enricher", maxAgeMs: 5 * 60 * 1000 }, // 5 min (60s cycle)
+  { name: "trade-enricher", maxAgeMs: 10 * 60 * 1000 }, // 10 min — beats every 60s mid-phase (poll/cluster/xmarket), but a single slow cross-market scan can gap; margin avoids false alarms
   { name: "resolution-tracker", maxAgeMs: 90 * 60 * 1000 }, // 90 min (1h cycle)
 ];
 
