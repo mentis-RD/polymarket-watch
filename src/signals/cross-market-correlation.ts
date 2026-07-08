@@ -232,10 +232,11 @@ async function isHighFreqTrader(wallet: string): Promise<boolean> {
   }
 }
 
-async function fireAlert(wallet: string, cluster: MarketBet[]): Promise<void> {
+/** Returns true only if a message was actually sent (false if no chat / cooldown-suppressed). */
+async function fireAlert(wallet: string, cluster: MarketBet[]): Promise<boolean> {
   const chat = process.env.TG_CHAT_MAIN;
   const thread = process.env.TG_THREAD_CLUSTER;
-  if (!chat) return;
+  if (!chat) return false;
 
   const dom = dominantSide(cluster);
   const shared = topSharedKeywords(cluster);
@@ -250,7 +251,7 @@ async function fireAlert(wallet: string, cluster: MarketBet[]): Promise<void> {
   const core = cluster.map((b) => b.slug).sort().slice(0, 3).join(",");
   const notionalBucket = Math.floor(Math.log(Math.max(1, dom.notional)) / Math.log(1.5));
   const cooldownKey = `xmarket:${wallet}:${core}:n${notionalBucket}`;
-  if (!canAlert(cooldownKey, COOLDOWN_MS)) return;
+  if (!canAlert(cooldownKey, COOLDOWN_MS)) return false;
 
   const kwTxt = shared.map((k) => `\`${escapeMd(k)}\``).join(", ") || "—";
   const lines = [
@@ -279,6 +280,7 @@ async function fireAlert(wallet: string, cluster: MarketBet[]): Promise<void> {
     "cross-market",
     `alert: ${wallet} ${cluster.length} markets, $${dom.notional.toFixed(0)}`,
   );
+  return true;
 }
 
 const MIN_CURRENT_POSITION_USD = 100; // EOD review: drop markets held < this
@@ -412,8 +414,10 @@ export async function runScan(): Promise<{ wallets_scanned: number; alerts: numb
       continue;
     }
     for (const cluster of firing) {
-      await fireAlert(wallet, cluster);
-      alerts++;
+      // Count only messages actually sent — fireAlert cooldown-suppresses repeats,
+      // so counting calls overstated "N alerts" in the scan summary (a recurring
+      // cluster logged 2-3 "alerts" every scan while sending nothing).
+      if (await fireAlert(wallet, cluster)) alerts++;
     }
   }
   if (mmSkipped > 0) log("cross-market", `skipped ${mmSkipped} high-frequency wallet(s) (>${MM_LIFETIME_OFFSET} lifetime trades)`);
