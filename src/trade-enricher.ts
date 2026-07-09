@@ -259,6 +259,19 @@ async function globalPollLoop(): Promise<void> {
 }
 
 log("trade-enricher", "starting");
+
+// Liveness backstop, independent of loop position. The per-phase beats fire
+// BETWEEN units (each pollMarket / each cluster event / before the xmarket
+// scan), but a SINGLE long async unit — one checkClusterMarket profiling ~50
+// wallets, or the whole cross-market scan — can exceed the watchdog window on
+// its own (etherscan/relay slow overnight → a lone 14m gap on 2026-07-09).
+// A 30s timer beats regardless: the slow work is async I/O (HTTP awaits), so
+// the event loop stays free between awaits and the timer fires — a busy-but-
+// alive enricher never false-alarms; only a truly dead/blocked event loop goes
+// stale, which is exactly what the watchdog should catch. unref() so the timer
+// never keeps the process alive on its own.
+setInterval(() => heartbeat("trade-enricher", { liveness: true }), 30_000).unref();
+
 // watchlist loop is essential — if it crashes, exit the whole process so
 // pm2 restarts and watchdog/heartbeat catches any longer outage.
 const watchlistLoop = pollLoop().catch((e) => {
